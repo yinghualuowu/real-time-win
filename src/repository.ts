@@ -1,12 +1,13 @@
 import { supabase } from './lib/supabase'
 import { normalizeData } from './model'
 import type { GamePlatform, GameProfile, Lane, MatchResult, StoredData } from './model'
-import { readCloudCache, writeCloudCache } from './storage'
+import { readCloudCacheEntry, writeCloudCache } from './storage'
 
 type SettingsRow = {
   initial_score: number
   win_points: number
   loss_points: number
+  revision: number
 }
 
 type MatchRow = {
@@ -21,8 +22,27 @@ type MatchRow = {
 
 export type CloudLoadResult = {
   data: StoredData
+  revision: number
+  lastSyncedData: StoredData
   offline: boolean
   error?: string
+}
+
+export class RevisionConflictError extends Error {
+  readonly code = 'REVISION_CONFLICT'
+  readonly expectedRevision: number
+  readonly actualRevision: number | null
+
+  constructor(expectedRevision: number, actualRevision: number | null, cause?: unknown) {
+    super(`文档版本冲突：期望 revision ${expectedRevision}，云端为 ${actualRevision ?? '未知'}`, { cause })
+    this.name = 'RevisionConflictError'
+    this.expectedRevision = expectedRevision
+    this.actualRevision = actualRevision
+  }
+}
+
+export function isRevisionConflictError(reason: unknown): reason is RevisionConflictError {
+  return reason instanceof RevisionConflictError
 }
 
 export async function loadGameProfiles(userId: string): Promise<GameProfile[]> {
@@ -58,7 +78,7 @@ export async function loadCloudData(userId: string, profileId: string): Promise<
     const [settingsResult, recordsResult] = await Promise.all([
       supabase
         .from('match_settings')
-        .select('initial_score, win_points, loss_points')
+        .select('initial_score, win_points, loss_points, revision')
         .eq('user_id', userId)
         .eq('profile_id', profileId)
         .maybeSingle(),
@@ -89,13 +109,16 @@ export async function loadCloudData(userId: string, profileId: string): Promise<
         points: row.points_change,
       })),
     })
-    writeCloudCache(userId, profileId, data)
-    return { data, offline: false }
+    const revision = settings?.revision ?? 0
+    writeCloudCache(userId, profileId, data, { revision, lastSyncedData: data })
+    return { data, revision, lastSyncedData: data, offline: false }
   } catch (reason) {
-    const cached = readCloudCache(userId, profileId)
+    const cached = readCloudCacheEntry(userId, profileId)
     if (cached) {
       return {
-        data: cached,
+        data: cached.data,
+        revision: cached.sync.revision,
+        lastSyncedData: cached.sync.lastSyncedData,
         offline: true,
         error: reason instanceof Error ? reason.message : '云端连接失败，正在显示离线缓存。',
       }
@@ -104,11 +127,32 @@ export async function loadCloudData(userId: string, profileId: string): Promise<
   }
 }
 
-export async function saveCloudData(userId: string, profileId: string, data: StoredData) {
-  const { error } = await supabase.rpc('save_match_document', {
+export async function saveCloudData(
+  userId: string,
+  profileId: string,
+  data: StoredData,
+  expectedRevision = readCloudCacheEntry(userId, profileId)?.sync.revision ?? 0,
+): Promise<number> {
+  const { data: revisionValue, error } = await supabase.rpc('save_match_document', {
     p_profile_id: profileId,
     p_document: data,
+    p_expected_revision: expectedRevision,
   })
-  if (error) throw error
-  writeCloudCache(userId, profileId, data)
+  if (error) {
+    if (error.message.includes('revision_conflict')) {
+      const actualRevision = /actual=(\d+)/.exec(error.message)?.[1]
+      throw new RevisionConflictError(
+        expectedRevision,
+        actualRevision === undefined ? null : Number(actualRevision),
+        error,
+      )
+    }
+    throw error
+  }
+  const revision = Number(revisionValue)
+  if (!Number.isInteger(revision) || revision < 1) {
+    throw new Error('云端返回了无效的文档 revision')
+  }
+  writeCloudCache(userId, profileId, data, { revision, lastSyncedData: data })
+  return revision
 }

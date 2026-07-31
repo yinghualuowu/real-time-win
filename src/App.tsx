@@ -9,11 +9,20 @@ import type {
   Lane, MatchRecord, MatchResult, MetricKey, PeriodPreset, StoredData,
 } from './model'
 import {
-  createGameProfile, loadCloudData, loadGameProfiles, saveCloudData, transferGameData,
+  createGameProfile, isRevisionConflictError, loadCloudData, loadGameProfiles,
+  saveCloudData, transferGameData,
 } from './repository'
 import {
   loadLocalData, localMigrationCompleted, markLocalMigrationCompleted, saveLocalData,
 } from './storage'
+import {
+  emptyRecentMatchFilters, filterRecentRecords, laneTone, teamSizeTone,
+} from './filters'
+import type { RecentMatchFilters } from './filters'
+import {
+  diffStoredData, mergeStoredData, resolveRecordConflicts,
+} from './sync'
+import type { ConflictChoice, MergeResult } from './sync'
 import { comparePeriods, getPresetRanges } from './utils/analytics'
 import type { DateRange } from './utils/analytics'
 import './App.css'
@@ -27,6 +36,16 @@ const metricConfig: Record<MetricKey, { name: string; type: 'bar' | 'line'; colo
 
 const emptyData = (): StoredData => ({ ...initialData, records: [] })
 
+type ConflictKind = 'migration' | 'import' | 'revision'
+
+type PendingConflict = {
+  kind: ConflictKind
+  local: StoredData
+  remote: StoredData
+  remoteRevision: number
+  merge: MergeResult
+}
+
 function datesBetween(start: string, end: string) {
   const dates: string[] = []
   const cursor = new Date(`${start}T00:00:00`)
@@ -39,6 +58,10 @@ function datesBetween(start: string, end: string) {
     cursor.setDate(cursor.getDate() + 1)
   }
   return dates
+}
+
+function recordSummary(record: MatchRecord) {
+  return `${record.date} 第 ${record.order} 场 · ${modeName(record.teamSize)} · ${laneName(record.lane)} · ${record.result ? '胜' : '负'} · ${record.points >= 0 ? '+' : ''}${record.points} 分`
 }
 
 function App() {
@@ -65,19 +88,38 @@ function App() {
   const [attachCurrentData, setAttachCurrentData] = useState(true)
   const [showRestDays, setShowRestDays] = useState(true)
   const [editingRecord, setEditingRecord] = useState<MatchRecord | null>(null)
+  const [recentFilters, setRecentFilters] = useState<RecentMatchFilters>(emptyRecentMatchFilters)
   const [showAuth, setShowAuth] = useState(false)
   const [loading, setLoading] = useState(false)
   const [offline, setOffline] = useState(false)
+  const [cloudRevision, setCloudRevision] = useState(0)
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null)
+  const [conflictChoices, setConflictChoices] = useState<Record<string, ConflictChoice>>({})
+  const [conflictSettingsChoice, setConflictSettingsChoice] = useState<ConflictChoice>('local')
   const [message, setMessage] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
+
+  const openConflict = (
+    kind: ConflictKind,
+    local: StoredData,
+    remote: StoredData,
+    remoteRevision: number,
+  ) => {
+    const merge = mergeStoredData(local, remote)
+    setConflictChoices({})
+    setConflictSettingsChoice('local')
+    setPendingConflict({ kind, local, remote, remoteRevision, merge })
+  }
 
   useEffect(() => {
     if (!session) {
       setProfiles([])
       setActiveProfileId('')
       setOffline(false)
+      setCloudRevision(0)
+      setPendingConflict(null)
       setData(loadLocalData())
       return
     }
@@ -106,8 +148,17 @@ function App() {
     void loadCloudData(session.user.id, activeProfileId).then((resultData) => {
       if (cancelled) return
       setData(resultData.data)
+      setCloudRevision(resultData.revision)
       setOffline(resultData.offline)
       if (resultData.error) setMessage(resultData.error)
+      if (!resultData.offline && !localMigrationCompleted(session.user.id)) {
+        const localData = loadLocalData()
+        if (diffStoredData(resultData.data, localData).hasChanges) {
+          openConflict('migration', localData, resultData.data, resultData.revision)
+        } else {
+          markLocalMigrationCompleted(session.user.id)
+        }
+      }
     }).catch((reason) => {
       if (!cancelled) setMessage(reason instanceof Error ? reason.message : '云端数据加载失败')
     }).finally(() => {
@@ -124,11 +175,27 @@ function App() {
     const previous = data
     setData(next)
     try {
-      if (session && activeProfileId) await saveCloudData(session.user.id, activeProfileId, next)
-      else saveLocalData(next)
+      if (session && activeProfileId) {
+        const revision = await saveCloudData(session.user.id, activeProfileId, next, cloudRevision)
+        setCloudRevision(revision)
+      } else {
+        saveLocalData(next)
+      }
       return true
     } catch (reason) {
       setData(previous)
+      if (session && activeProfileId && isRevisionConflictError(reason)) {
+        try {
+          const latest = await loadCloudData(session.user.id, activeProfileId)
+          if (latest.offline) throw new Error(latest.error ?? '无法加载最新云端数据')
+          setCloudRevision(latest.revision)
+          openConflict('revision', next, latest.data, latest.revision)
+          setMessage('检测到其他设备的新修改，请选择冲突处理方式')
+        } catch (loadReason) {
+          setMessage(loadReason instanceof Error ? loadReason.message : '加载最新云端数据失败')
+        }
+        return false
+      }
       setMessage(reason instanceof Error ? reason.message : '保存失败')
       return false
     }
@@ -138,6 +205,13 @@ function App() {
     () => [...data.records].sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order || a.id.localeCompare(b.id)),
     [data.records],
   )
+  const filteredRecentRecords = useMemo(
+    () => filterRecentRecords(sortedRecords, recentFilters),
+    [recentFilters, sortedRecords],
+  )
+  const recentFiltersActive = Object.entries(recentFilters).some(([key, value]) => (
+    key === 'teamSize' ? value !== null : value !== '' && value !== 'all'
+  ))
 
   const analytics = useMemo(() => {
     const wins = sortedRecords.filter((record) => record.result === 1).length
@@ -291,20 +365,74 @@ function App() {
     }
   }
 
-  const migrateLocalData = async () => {
-    if (!session || !activeProfileId) return
+  const saveConflictResolution = async (next: StoredData) => {
+    if (!pendingConflict) return
     setLoading(true)
     try {
-      const localData = loadLocalData()
-      await saveCloudData(session.user.id, activeProfileId, localData)
-      markLocalMigrationCompleted(session.user.id)
-      setData(localData)
-      setMessage(`已迁移 ${localData.records.length} 条本地记录`)
+      if (session && activeProfileId) {
+        const revision = await saveCloudData(
+          session.user.id,
+          activeProfileId,
+          next,
+          pendingConflict.remoteRevision,
+        )
+        setCloudRevision(revision)
+      } else {
+        saveLocalData(next)
+      }
+      if (pendingConflict.kind === 'migration' && session) {
+        saveLocalData(next)
+        markLocalMigrationCompleted(session.user.id)
+      }
+      setData(next)
+      setPendingConflict(null)
+      setMessage(`冲突已解决，共保留 ${next.records.length} 条记录`)
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : '本地数据迁移失败')
+      if (session && activeProfileId && isRevisionConflictError(reason)) {
+        try {
+          const latest = await loadCloudData(session.user.id, activeProfileId)
+          if (latest.offline) throw new Error(latest.error ?? '无法加载最新云端数据')
+          setCloudRevision(latest.revision)
+          openConflict(pendingConflict.kind, next, latest.data, latest.revision)
+          setMessage('解决期间云端再次更新，请基于最新数据重新选择')
+        } catch (loadReason) {
+          setMessage(loadReason instanceof Error ? loadReason.message : '重新加载云端数据失败')
+        }
+      } else {
+        setMessage(reason instanceof Error ? reason.message : '冲突处理失败')
+      }
     } finally {
       setLoading(false)
     }
+  }
+
+  const discardConflictLocal = () => {
+    if (!pendingConflict) return
+    setData(pendingConflict.remote)
+    setCloudRevision(pendingConflict.remoteRevision)
+    if (pendingConflict.kind === 'migration' && session) {
+      saveLocalData(pendingConflict.remote)
+      markLocalMigrationCompleted(session.user.id)
+    }
+    setPendingConflict(null)
+    setMessage(pendingConflict.kind === 'import' ? '已取消导入并保留当前数据' : '已舍弃本地修改并保留云端数据')
+  }
+
+  const mergeConflictData = () => {
+    if (!pendingConflict) return
+    const allDecided = pendingConflict.merge.conflicts.every((conflict) => conflictChoices[conflict.id])
+    if (!allDecided) {
+      setMessage('请先为每条内容冲突选择要保留的版本')
+      return
+    }
+    const recordsMerged = resolveRecordConflicts(pendingConflict.merge, conflictChoices)
+    const settings = conflictSettingsChoice === 'local' ? pendingConflict.local : pendingConflict.remote
+    void saveConflictResolution({
+      ...recordsMerged,
+      initialScore: settings.initialScore,
+      winPoints: settings.winPoints,
+      lossPoints: settings.lossPoints,
+    })
   }
 
   const addRecord = async (event: React.FormEvent) => {
@@ -370,7 +498,11 @@ function App() {
     if (!file) return
     try {
       const imported = normalizeData(JSON.parse(await file.text()))
-      if (await persistData(imported)) setMessage(`成功导入 ${imported.records.length} 条记录`)
+      if (!diffStoredData(data, imported).hasChanges) {
+        setMessage('导入文件与当前数据一致')
+      } else {
+        openConflict('import', imported, data, cloudRevision)
+      }
     } catch {
       setMessage('导入失败：请检查 JSON 数据格式')
     } finally {
@@ -410,6 +542,11 @@ function App() {
 
   const metricValue = (row: (typeof comparisonRows)[number], side: 'previous' | 'current') => row[side][compareMetric]
   const metricUnit = compareMetric === 'rate' ? '%' : compareMetric === 'points' ? ' 分' : ' 场'
+  const conflictLabels = pendingConflict?.kind === 'import'
+    ? { local: '导入文件', remote: '当前数据', overwrite: '用导入文件覆盖', discard: '取消导入' }
+    : pendingConflict?.kind === 'revision'
+      ? { local: '当前修改', remote: '云端最新', overwrite: '用当前修改覆盖云端', discard: '舍弃当前修改' }
+      : { local: '本地数据', remote: '云端数据', overwrite: '用本地覆盖云端', discard: '舍弃本地数据' }
 
   if (authLoading) return <div className="page-loading">正在恢复登录状态…</div>
 
@@ -438,13 +575,6 @@ function App() {
         {loading && <div className="loading-bar" />}
         {message && <button className="toast" onClick={() => setMessage('')}>{message} ×</button>}
         {offline && <div className="status-banner warning">当前正在显示离线缓存，恢复连接前不能修改数据。</div>}
-        {session && !localMigrationCompleted(session.user.id) && activeProfileId && (
-          <div className="status-banner migration-banner">
-            <span>检测到本机历史数据，是否关联到当前游戏账号？</span>
-            <div><button onClick={() => void migrateLocalData()}>迁移到当前账号</button><button onClick={() => { markLocalMigrationCompleted(session.user.id); setMessage('已保留云端数据') }}>忽略</button></div>
-          </div>
-        )}
-
         <section className="welcome">
           <div><p className="eyebrow">MATCH OVERVIEW</p><h1>{activeProfile ? `${activeProfile.nickname} 的对局表现` : '对局表现总览'}</h1><p>记录每场胜负，洞察分路、胜率与积分趋势。</p></div>
           <div className="score-rule">
@@ -484,7 +614,7 @@ function App() {
           <article className="metric-card"><span className="metric-icon orange">✓</span><div><small>胜 / 负</small><strong>{analytics.wins}<i> / {data.records.length - analytics.wins}</i></strong><em>场</em></div></article>
         </section>
 
-        <section className="content-grid">
+        <section className="chart-stack">
           <article className="panel chart-panel wide">
             <div className="panel-heading chart-heading">
               <div><h2>自定义组合分析</h2><p>自由组合维度、指标与图表类型</p></div>
@@ -571,15 +701,59 @@ function App() {
         </section>
 
         <section className="panel records-panel">
-          <div className="panel-heading"><div><h2>最近对局</h2><p>共 {data.records.length} 条记录</p></div></div>
+          <div className="panel-heading"><div><h2>最近对局</h2><p>{recentFiltersActive ? `筛选出 ${filteredRecentRecords.length} / ${data.records.length} 条记录` : `共 ${data.records.length} 条记录`}</p></div></div>
+          <div className="record-filters">
+            <label><span>开始日期</span><input type="date" value={recentFilters.startDate} max={recentFilters.endDate || undefined} onChange={(event) => setRecentFilters({ ...recentFilters, startDate: event.target.value })} /></label>
+            <label><span>结束日期</span><input type="date" value={recentFilters.endDate} min={recentFilters.startDate || undefined} onChange={(event) => setRecentFilters({ ...recentFilters, endDate: event.target.value })} /></label>
+            <label><span>组排</span><select className={recentFilters.teamSize === null ? '' : teamSizeTone(recentFilters.teamSize)} value={recentFilters.teamSize ?? 'all'} onChange={(event) => setRecentFilters({ ...recentFilters, teamSize: event.target.value === 'all' ? null : Number(event.target.value) })}><option value="all">全部组排</option>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{modeName(size)}</option>)}</select></label>
+            <label><span>分路</span><select className={recentFilters.lane === 'all' ? '' : laneTone(recentFilters.lane)} value={recentFilters.lane === 'all' ? 'all' : recentFilters.lane === null ? 'unknown' : recentFilters.lane} onChange={(event) => setRecentFilters({ ...recentFilters, lane: event.target.value === 'all' ? 'all' : event.target.value === 'unknown' ? null : Number(event.target.value) as Lane })}><option value="all">全部分路</option><option value="unknown">未设置</option>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{laneName(value as Lane)}</option>)}</select></label>
+            <label><span>结果</span><select value={recentFilters.result} onChange={(event) => setRecentFilters({ ...recentFilters, result: event.target.value === 'all' ? 'all' : Number(event.target.value) as MatchResult })}><option value="all">全部结果</option><option value="1">胜利</option><option value="0">失败</option></select></label>
+            <button type="button" disabled={!recentFiltersActive} onClick={() => setRecentFilters(emptyRecentMatchFilters)}>重置筛选</button>
+          </div>
           <div className="table-wrap"><table><thead><tr><th>日期 / 场次</th><th>组排</th><th>分路</th><th>结果</th><th>积分</th><th /></tr></thead><tbody>
-            {[...sortedRecords].reverse().map((record) => <tr key={record.id}><td>{record.date} · {record.order}</td><td><span className="mode-tag">{modeName(record.teamSize)}</span></td><td><span className="lane-tag">{laneName(record.lane)}</span></td><td><span className={`result-tag ${record.result ? 'win' : 'loss'}`}>{record.result ? '胜利' : '失败'}</span></td><td className={record.points >= 0 ? 'positive' : 'negative'}>{record.points >= 0 ? '+' : ''}{record.points}</td><td><div className="row-actions"><button className="edit" onClick={() => setEditingRecord({ ...record })}>编辑</button><button className="delete" onClick={() => void deleteRecord(record.id)}>×</button></div></td></tr>)}
-            {!sortedRecords.length && <tr><td colSpan={6} className="empty-cell">暂无对局记录</td></tr>}
+            {[...filteredRecentRecords].reverse().map((record) => <tr key={record.id}><td>{record.date} · {record.order}</td><td><span className={`mode-tag ${teamSizeTone(record.teamSize)}`}>{modeName(record.teamSize)}</span></td><td><span className={`lane-tag ${laneTone(record.lane)}`}>{laneName(record.lane)}</span></td><td><span className={`result-tag ${record.result ? 'win' : 'loss'}`}>{record.result ? '胜利' : '失败'}</span></td><td className={record.points >= 0 ? 'positive' : 'negative'}>{record.points >= 0 ? '+' : ''}{record.points}</td><td><div className="row-actions"><button className="edit" onClick={() => setEditingRecord({ ...record })}>编辑</button><button className="delete" onClick={() => void deleteRecord(record.id)}>×</button></div></td></tr>)}
+            {!filteredRecentRecords.length && <tr><td colSpan={6} className="empty-cell">{data.records.length ? '没有符合筛选条件的对局' : '暂无对局记录'}</td></tr>}
           </tbody></table></div>
         </section>
       </main>
       <footer>{session ? `已登录 · ${activeProfile ? `${activeProfile.platform}区 ${activeProfile.nickname}` : '请选择游戏账号'}` : '本地模式 · 登录后可同步到云端'}</footer>
 
+      {pendingConflict && (
+        <div className="auth-backdrop">
+          <section className="auth-card conflict-card" role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+            <h2 id="conflict-title">发现数据冲突</h2>
+            <p>{conflictLabels.local}有 {pendingConflict.local.records.length} 条，{conflictLabels.remote}有 {pendingConflict.remote.records.length} 条。请选择处理方式，确认前不会写入数据。</p>
+            <div className="conflict-summary">
+              <span><b>{pendingConflict.merge.data.records.length}</b> 条合并后记录</span>
+              <span><b>{pendingConflict.merge.conflicts.length}</b> 条内容冲突</span>
+            </div>
+            {diffStoredData(pendingConflict.local, pendingConflict.remote).changedSettings.length > 0 && (
+              <fieldset className="settings-conflict">
+                <legend>积分设置使用哪一份？</legend>
+                <label><input type="radio" name="settings-source" checked={conflictSettingsChoice === 'local'} onChange={() => setConflictSettingsChoice('local')} /> {conflictLabels.local}（初始 {pendingConflict.local.initialScore}，胜 +{pendingConflict.local.winPoints}，负 -{pendingConflict.local.lossPoints}）</label>
+                <label><input type="radio" name="settings-source" checked={conflictSettingsChoice === 'remote'} onChange={() => setConflictSettingsChoice('remote')} /> {conflictLabels.remote}（初始 {pendingConflict.remote.initialScore}，胜 +{pendingConflict.remote.winPoints}，负 -{pendingConflict.remote.lossPoints}）</label>
+              </fieldset>
+            )}
+            {pendingConflict.merge.conflicts.length > 0 && (
+              <div className="record-conflicts">
+                <h3>逐条选择冲突版本</h3>
+                {pendingConflict.merge.conflicts.map((conflict) => (
+                  <fieldset key={conflict.id}>
+                    <legend>{conflict.differingFields.join('、')} 不同</legend>
+                    <label className={conflictChoices[conflict.id] === 'local' ? 'selected' : ''}><input type="radio" name={`record-${conflict.id}`} checked={conflictChoices[conflict.id] === 'local'} onChange={() => setConflictChoices({ ...conflictChoices, [conflict.id]: 'local' })} /><span><b>{conflictLabels.local}</b>{recordSummary(conflict.local)}</span></label>
+                    <label className={conflictChoices[conflict.id] === 'remote' ? 'selected' : ''}><input type="radio" name={`record-${conflict.id}`} checked={conflictChoices[conflict.id] === 'remote'} onChange={() => setConflictChoices({ ...conflictChoices, [conflict.id]: 'remote' })} /><span><b>{conflictLabels.remote}</b>{recordSummary(conflict.remote)}</span></label>
+                  </fieldset>
+                ))}
+              </div>
+            )}
+            <div className="conflict-actions">
+              <button className="button danger" disabled={loading} onClick={() => void saveConflictResolution(pendingConflict.local)}>{conflictLabels.overwrite}</button>
+              <button className="button secondary" disabled={loading} onClick={discardConflictLocal}>{conflictLabels.discard}</button>
+              <button className="button primary" disabled={loading || pendingConflict.merge.conflicts.some((conflict) => !conflictChoices[conflict.id])} onClick={mergeConflictData}>合并并保存</button>
+            </div>
+          </section>
+        </div>
+      )}
       {showAuth && !session && <AuthPanel onCancel={() => setShowAuth(false)} />}
       {editingRecord && (
         <div className="auth-backdrop">

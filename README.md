@@ -21,6 +21,8 @@ npm run dev
    `supabase/migrations/20260728_initial_schema.sql`
    已执行过初始脚本的数据库还需要执行：
    `supabase/migrations/20260730_add_match_points.sql`
+   和：
+   `supabase/migrations/20260801_add_document_revision.sql`
 3. 复制 `.env.example` 为 `.env.local`：
 
 ```dotenv
@@ -88,6 +90,32 @@ https://yinghualuowu.github.io/real-time-win/
 如果启用自定义域名，还需要加入自定义域名，并在 GitHub
 `Settings → Pages → Custom domain` 和 DNS 服务商处完成域名配置。
 
+## 数据同步与冲突处理
+
+云端文档使用 `match_settings.revision` 做乐观并发控制。加载数据时客户端会保存
+当前 revision；保存时只有 revision 未变化才会成功。如果其他设备或标签页已经
+更新过云端，旧页面不会继续覆盖历史数据，而是重新加载云端并显示冲突对话框。
+
+登录迁移、JSON 导入以及跨设备版本冲突都提供三种处理方式：
+
+- **覆盖**：使用本地修改或导入文件替换云端/当前数据。另一侧独有的数据会被删除。
+- **舍弃**：放弃本地修改或导入文件，保留云端/当前数据。本地迁移选择舍弃后，
+  浏览器本地副本会同步为云端版本，避免退出登录后旧数据再次出现。
+- **合并**：按记录 ID 保留双方独有记录；相同 ID 但内容不同的记录必须逐条选择
+  本地或云端版本。合并后会按日期自动重新整理场次序号。
+
+积分初始值、胜场积分和负场积分不做静默合并，发生差异时也需要选择使用哪一侧。
+冲突处理提交期间如果云端 revision 再次变化，应用会基于最新云端数据重新提示。
+
+### revision migration 注意事项
+
+必须先在 Supabase 执行 `20260801_add_document_revision.sql`，再部署使用新版同步逻辑
+的前端。迁移会增加 `match_settings.revision`，并把两参数
+`save_match_document(uuid, jsonb)` 替换为带 `p_expected_revision` 的三参数版本。
+
+执行前建议备份数据库。若必须回滚前端，需要同时从上一份 migration 恢复旧的
+`save_match_document` 函数；不要只删除 `revision` 列，否则新旧客户端都会无法保存。
+
 ### 常见部署问题
 
 - Actions 提示缺少配置：检查两个 `VITE_SUPABASE_*` Repository secrets。
@@ -99,6 +127,8 @@ https://yinghualuowu.github.io/real-time-win/
   或使用无痕窗口排除缓存。
 - 自定义域名取消后页面白屏：恢复项目路径 `base: '/real-time-win/'`，并访问项目
   Pages 地址，而不是用户 Pages 根地址。
+- 登录后云端无法加载或提示缺少 `revision`：尚未执行
+  `20260801_add_document_revision.sql`。
 
 ## JSON 格式
 
