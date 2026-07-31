@@ -54,6 +54,17 @@ main { width: min(1240px, calc(100% - 48px)); margin: 0 auto; padding: 46px 0 64
 .dimension-select { border: 1px solid #dfe5ee; border-radius: 8px; background: #f8faff; color: #52617a; padding: 7px 10px; outline: none; font-size: 12px; }
 .chart-controls { display: flex; gap: 8px; }
 .chart-controls select { padding: 7px 9px; font-size: 12px; }
+.fullscreen-button { border: 1px solid #dfe5ee; border-radius: 9px; padding: 7px 10px; color: #5b6a82; background: #fff; cursor: pointer; font-size: 12px; white-space: nowrap; }
+.fullscreen-button:hover { color: #5274d9; border-color: #aebfec; background: #f4f7ff; }
+.analysis-range-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 9px; padding: 5px 23px 4px; }
+.analysis-range-controls label { display: flex; flex-direction: column; gap: 5px; }
+.analysis-range-controls label span { color: #8490a4; font-size: 10px; font-weight: 600; }
+.analysis-range-controls input, .analysis-range-controls select { border: 1px solid #dfe5ee; border-radius: 8px; padding: 7px 9px; color: #52617a; background: #f8faff; outline: none; font: inherit; font-size: 11px; }
+.analysis-range-controls input:focus, .analysis-range-controls select:focus { border-color: #7797f5; box-shadow: 0 0 0 3px #527cf514; }
+.analysis-range-controls button { border: 1px solid #dfe5ee; border-radius: 8px; padding: 7px 10px; color: #65738a; background: #fff; cursor: pointer; font-size: 11px; }
+.analysis-range-controls button:disabled { cursor: not-allowed; opacity: .45; }
+.chart-panel:fullscreen { overflow: auto; border: 0; border-radius: 0; background: #fff; }
+.chart-panel:fullscreen .panel-heading { padding-top: 25px; }
 .metric-picker { display: flex; flex-wrap: wrap; gap: 7px; padding: 6px 23px 0; }
 .metric-picker label { display: flex; align-items: center; gap: 6px; border: 1px solid #e1e7f0; border-radius: 16px; padding: 5px 9px; color: #8490a4; background: #fff; cursor: pointer; font-size: 11px; transition: .15s; }
 .metric-picker label.selected { color: #46546c; border-color: #bdcbef; background: #f5f8ff; }
@@ -220,6 +231,7 @@ footer { padding: 22px; border-top: 1px solid #e7ecf3; color: #a4adbc; text-alig
   .game-account-bar select, .game-account-bar .button { flex: 1; }
   .chart-heading { align-items: flex-start; gap: 10px; }
   .chart-controls { flex-direction: column; }
+  .analysis-range-controls label { flex: 1 1 135px; }
   .edit-form-grid { grid-template-columns: 1fr; }
   .score-rule { width: 100%; box-sizing: border-box; flex-wrap: wrap; }
   .metric-grid { grid-template-columns: 1fr; }

@@ -25,6 +25,8 @@ import {
 import type { ConflictChoice, MergeResult } from './sync'
 import { comparePeriods, getPresetRanges } from './utils/analytics'
 import type { DateRange } from './utils/analytics'
+import { buildCustomAnalysisRows } from './utils/customAnalysis'
+import type { AnalysisGranularity } from './utils/customAnalysis'
 import './App.css'
 
 const metricConfig: Record<MetricKey, { name: string; type: 'bar' | 'line'; color: string; axis: number }> = {
@@ -32,6 +34,13 @@ const metricConfig: Record<MetricKey, { name: string; type: 'bar' | 'line'; colo
   wins: { name: '胜场数', type: 'bar', color: '#72d5aa', axis: 0 },
   rate: { name: '胜率', type: 'line', color: '#4f7cff', axis: 1 },
   points: { name: '净积分', type: 'line', color: '#7c5ce7', axis: 2 },
+}
+
+type AnalysisMetricKey = MetricKey | 'score'
+
+const analysisMetricConfig: Record<AnalysisMetricKey, { name: string; type: 'bar' | 'line'; color: string; axis: number }> = {
+  ...metricConfig,
+  score: { name: '累计积分', type: 'line', color: '#f0a44b', axis: 2 },
 }
 
 const emptyData = (): StoredData => ({ ...initialData, records: [] })
@@ -72,8 +81,13 @@ function App() {
   const [result, setResult] = useState<MatchResult>(1)
   const [lane, setLane] = useState<Lane>(0)
   const [analysisDimension, setAnalysisDimension] = useState<AnalysisDimension>('date')
-  const [analysisMetrics, setAnalysisMetrics] = useState<MetricKey[]>(['games', 'rate'])
+  const [analysisMetrics, setAnalysisMetrics] = useState<AnalysisMetricKey[]>(['games', 'rate'])
   const [chartType, setChartType] = useState<ChartType>('auto')
+  const [analysisStartDate, setAnalysisStartDate] = useState('')
+  const [analysisEndDate, setAnalysisEndDate] = useState('')
+  const [analysisGranularity, setAnalysisGranularity] = useState<AnalysisGranularity>('day')
+  const [analysisFullscreen, setAnalysisFullscreen] = useState(false)
+  const [scoreFullscreen, setScoreFullscreen] = useState(false)
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('week')
   const [compareDimension, setCompareDimension] = useState<GroupDimension>('overall')
   const [compareMetric, setCompareMetric] = useState<MetricKey>('rate')
@@ -98,8 +112,20 @@ function App() {
   const [conflictSettingsChoice, setConflictSettingsChoice] = useState<ConflictChoice>('local')
   const [message, setMessage] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
+  const analysisPanel = useRef<HTMLElement>(null)
+  const scorePanel = useRef<HTMLElement>(null)
 
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId)
+
+  useEffect(() => {
+    const updateFullscreen = () => {
+      setAnalysisFullscreen(document.fullscreenElement === analysisPanel.current)
+      setScoreFullscreen(document.fullscreenElement === scorePanel.current)
+      window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
+    }
+    document.addEventListener('fullscreenchange', updateFullscreen)
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen)
+  }, [])
 
   const openConflict = (
     kind: ConflictKind,
@@ -275,15 +301,18 @@ function App() {
   }, [data, showRestDays, sortedRecords])
 
   const analysisRows = useMemo(() => {
-    const source = analysisDimension === 'date' ? analytics.daily : analysisDimension === 'teamSize' ? analytics.modes : analytics.lanes
-    return source.map((item) => ({
-      label: item.label,
-      games: item.games,
-      wins: item.wins,
-      rate: item.games ? Number(percent(item.wins, item.games)) : null,
-      points: item.points,
-    }))
-  }, [analysisDimension, analytics])
+    return buildCustomAnalysisRows(
+      sortedRecords,
+      analysisDimension,
+      analysisGranularity,
+      data.initialScore,
+      analysisStartDate,
+      analysisEndDate,
+    )
+  }, [
+    analysisDimension, analysisEndDate, analysisGranularity,
+    analysisStartDate, data.initialScore, sortedRecords,
+  ])
 
   const analysisOption = useMemo(() => {
     const selectedMetrics = chartType === 'pie' ? analysisMetrics.slice(0, 1) : analysisMetrics
@@ -293,7 +322,7 @@ function App() {
         tooltip: { trigger: 'item' },
         legend: { bottom: 4 },
         series: [{
-          name: metricConfig[metric].name,
+          name: analysisMetricConfig[metric].name,
           type: 'pie',
           radius: ['38%', '68%'],
           data: analysisRows.map((item) => ({ name: item.label, value: item[metric] })),
@@ -303,7 +332,7 @@ function App() {
     }
     return {
       tooltip: { trigger: 'axis' },
-      legend: { data: selectedMetrics.map((key) => metricConfig[key].name), right: 8 },
+      legend: { data: selectedMetrics.map((key) => analysisMetricConfig[key].name), right: 8 },
       grid: { left: 48, right: 60, top: 56, bottom: 38 },
       xAxis: { type: 'category', data: analysisRows.map((item) => item.label) },
       yAxis: [
@@ -312,7 +341,7 @@ function App() {
         { type: 'value', name: '分', position: 'right', offset: 38, splitLine: { show: false } },
       ],
       series: selectedMetrics.map((key) => {
-        const config = metricConfig[key]
+        const config = analysisMetricConfig[key]
         const type = chartType === 'auto' ? config.type : chartType
         return {
           name: config.name, type, yAxisIndex: config.axis, smooth: true, barMaxWidth: 30,
@@ -362,6 +391,18 @@ function App() {
     } else {
       setPreviousRange((range) => ({ ...range, label: '对比期' }))
       setCurrentRange((range) => ({ ...range, label: '当前期' }))
+    }
+  }
+
+  const toggleChartFullscreen = async (panel: HTMLElement | null) => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen()
+      } else {
+        await panel?.requestFullscreen()
+      }
+    } catch {
+      setMessage('当前浏览器无法进入全屏模式')
     }
   }
 
@@ -615,11 +656,15 @@ function App() {
         </section>
 
         <section className="chart-stack">
-          <article className="panel chart-panel wide">
+          <article ref={analysisPanel} className="panel chart-panel wide analysis-panel">
             <div className="panel-heading chart-heading">
               <div><h2>自定义组合分析</h2><p>自由组合维度、指标与图表类型</p></div>
               <div className="chart-controls">
-                <select value={analysisDimension} onChange={(event) => setAnalysisDimension(event.target.value as AnalysisDimension)}>
+                <select value={analysisDimension} onChange={(event) => {
+                  const next = event.target.value as AnalysisDimension
+                  setAnalysisDimension(next)
+                  if (next !== 'date') setAnalysisMetrics((current) => current.filter((metric) => metric !== 'score'))
+                }}>
                   <option value="date">按日期</option><option value="teamSize">按组排</option><option value="lane">按分路</option>
                 </select>
                 <select value={chartType} onChange={(event) => {
@@ -629,25 +674,34 @@ function App() {
                 }}>
                   <option value="auto">自动组合</option><option value="line">折线图</option><option value="bar">柱状图</option><option value="scatter">散点图</option><option value="pie">饼图</option>
                 </select>
+                <button type="button" className="fullscreen-button" onClick={() => void toggleChartFullscreen(analysisPanel.current)}>{analysisFullscreen ? '退出全屏' : '全屏显示'}</button>
               </div>
             </div>
+            <div className="analysis-range-controls">
+              <label><span>开始日期</span><input type="date" value={analysisStartDate} max={analysisEndDate || undefined} onChange={(event) => setAnalysisStartDate(event.target.value)} /></label>
+              <label><span>结束日期</span><input type="date" value={analysisEndDate} min={analysisStartDate || undefined} onChange={(event) => setAnalysisEndDate(event.target.value)} /></label>
+              {analysisDimension === 'date' && <label><span>日期划分</span><select value={analysisGranularity} onChange={(event) => setAnalysisGranularity(event.target.value as AnalysisGranularity)}><option value="day">按日</option><option value="week">按周</option><option value="month">按月</option></select></label>}
+              <button type="button" disabled={!analysisStartDate && !analysisEndDate} onClick={() => { setAnalysisStartDate(''); setAnalysisEndDate('') }}>清除范围</button>
+            </div>
             <div className="metric-picker">
-              {(Object.keys(metricConfig) as MetricKey[]).map((key) => (
+              {(Object.keys(analysisMetricConfig) as AnalysisMetricKey[])
+                .filter((key) => key !== 'score' || analysisDimension === 'date')
+                .map((key) => (
                 <label key={key} className={analysisMetrics.includes(key) ? 'selected' : ''}>
                   <input type="checkbox" checked={analysisMetrics.includes(key)} onChange={() => setAnalysisMetrics((current) => {
                     if (chartType === 'pie') return [key]
                     return current.includes(key) ? current.filter((item) => item !== key) : [...current, key]
                   })} />
-                  <i style={{ background: metricConfig[key].color }} />{metricConfig[key].name}
+                  <i style={{ background: analysisMetricConfig[key].color }} />{analysisMetricConfig[key].name}
                 </label>
               ))}
               {chartType === 'pie' && <small>饼图一次展示一个指标</small>}
             </div>
-            {analysisRows.length && analysisMetrics.length ? <ReactECharts option={analysisOption} style={{ height: 330 }} /> : <div className="empty">请选择指标并添加对局数据</div>}
+            {analysisRows.length && analysisMetrics.length ? <ReactECharts option={analysisOption} notMerge style={{ height: analysisFullscreen ? 'calc(100vh - 205px)' : 330 }} /> : <div className="empty">当前日期范围暂无数据</div>}
           </article>
-          <article className="panel chart-panel">
-            <div className="panel-heading"><div><h2>逐场积分走势</h2><p>橙色菱形表示休息日，积分保持不变</p></div><div className="score-chart-actions"><label><input type="checkbox" checked={showRestDays} onChange={(event) => setShowRestDays(event.target.checked)} /> 显示休息日</label><span className={analytics.score >= data.initialScore ? 'trend up' : 'trend down'}>{analytics.score - data.initialScore >= 0 ? '+' : ''}{analytics.score - data.initialScore}</span></div></div>
-            {sortedRecords.length ? <ReactECharts option={scoreOption} style={{ height: 330 }} /> : <div className="empty">暂无数据</div>}
+          <article ref={scorePanel} className="panel chart-panel score-panel">
+            <div className="panel-heading"><div><h2>逐场积分走势</h2><p>橙色菱形表示休息日，积分保持不变</p></div><div className="score-chart-actions"><label><input type="checkbox" checked={showRestDays} onChange={(event) => setShowRestDays(event.target.checked)} /> 显示休息日</label><span className={analytics.score >= data.initialScore ? 'trend up' : 'trend down'}>{analytics.score - data.initialScore >= 0 ? '+' : ''}{analytics.score - data.initialScore}</span><button type="button" className="fullscreen-button" onClick={() => void toggleChartFullscreen(scorePanel.current)}>{scoreFullscreen ? '退出全屏' : '全屏显示'}</button></div></div>
+            {sortedRecords.length ? <ReactECharts option={scoreOption} notMerge style={{ height: scoreFullscreen ? 'calc(100vh - 105px)' : 330 }} /> : <div className="empty">暂无数据</div>}
           </article>
         </section>
 
