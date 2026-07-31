@@ -18,6 +18,19 @@ type MatchRow = {
   result: number
   lane: number | null
   points_change: number
+  hero_external_id: string | null
+}
+
+type SeasonRow = {
+  external_id: string
+  name: string
+  starts_on: string
+  ends_on: string
+}
+
+type HeroRow = {
+  external_id: string
+  name: string
 }
 
 export type CloudLoadResult = {
@@ -75,7 +88,7 @@ export async function transferGameData(fromProfileId: string, toProfileId: strin
 
 export async function loadCloudData(userId: string, profileId: string): Promise<CloudLoadResult> {
   try {
-    const [settingsResult, recordsResult] = await Promise.all([
+    const [settingsResult, seasonsResult, heroesResult, recordsResult] = await Promise.all([
       supabase
         .from('match_settings')
         .select('initial_score, win_points, loss_points, revision')
@@ -83,22 +96,48 @@ export async function loadCloudData(userId: string, profileId: string): Promise<
         .eq('profile_id', profileId)
         .maybeSingle(),
       supabase
+        .from('match_seasons')
+        .select('external_id, name, starts_on, ends_on')
+        .eq('user_id', userId)
+        .eq('profile_id', profileId)
+        .order('starts_on'),
+      supabase
+        .from('match_heroes')
+        .select('external_id, name')
+        .eq('user_id', userId)
+        .eq('profile_id', profileId)
+        .order('name'),
+      supabase
         .from('match_records')
-        .select('external_id, played_on, match_order, team_size, result, lane, points_change')
+        .select('external_id, played_on, match_order, team_size, result, lane, points_change, hero_external_id')
         .eq('user_id', userId)
         .eq('profile_id', profileId)
         .order('played_on')
         .order('match_order'),
     ])
     if (settingsResult.error) throw settingsResult.error
+    if (seasonsResult.error) throw seasonsResult.error
+    if (heroesResult.error) throw heroesResult.error
     if (recordsResult.error) throw recordsResult.error
     const settings = settingsResult.data as SettingsRow | null
+    const seasonRows = (seasonsResult.data ?? []) as SeasonRow[]
+    const heroRows = (heroesResult.data ?? []) as HeroRow[]
     const rows = (recordsResult.data ?? []) as MatchRow[]
     const data = normalizeData({
-      schemaVersion: 2,
+      schemaVersion: 3,
       initialScore: settings?.initial_score ?? 100,
       winPoints: settings?.win_points ?? 10,
       lossPoints: settings?.loss_points ?? 10,
+      seasons: seasonRows.map((row) => ({
+        id: row.external_id,
+        name: row.name,
+        startDate: row.starts_on,
+        endDate: row.ends_on,
+      })),
+      heroes: heroRows.map((row) => ({
+        id: row.external_id,
+        name: row.name,
+      })),
       records: rows.map((row) => ({
         id: row.external_id,
         date: row.played_on,
@@ -107,6 +146,7 @@ export async function loadCloudData(userId: string, profileId: string): Promise<
         result: row.result as MatchResult,
         lane: row.lane as Lane | null,
         points: row.points_change,
+        heroId: row.hero_external_id,
       })),
     })
     const revision = settings?.revision ?? 0

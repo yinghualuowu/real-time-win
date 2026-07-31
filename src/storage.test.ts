@@ -3,12 +3,14 @@ import type { StoredData } from './model'
 import { readCloudCacheEntry, writeCloudCache } from './storage'
 
 const data: StoredData = {
-  schemaVersion: 2,
+  schemaVersion: 3,
   initialScore: 100,
   winPoints: 10,
   lossPoints: 10,
+  seasons: [],
+  heroes: [],
   records: [
-    { id: 'record-1', date: '2026-08-01', order: 1, teamSize: 2, result: 1, lane: 0, points: 10 },
+    { id: 'record-1', date: '2026-08-01', order: 1, teamSize: 2, result: 1, lane: 0, points: 10, heroId: null },
   ],
 }
 

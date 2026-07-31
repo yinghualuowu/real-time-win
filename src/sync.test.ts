@@ -4,6 +4,7 @@ import {
   diffStoredData,
   mergeStoredData,
   reorderRecordsByDate,
+  resolveDataConflicts,
   resolveRecordConflicts,
 } from './sync'
 
@@ -13,10 +14,12 @@ function record(id: string, date: string, order: number, points = 10): MatchReco
 
 function document(records: MatchRecord[], initialScore = 100): StoredData {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     initialScore,
     winPoints: 10,
     lossPoints: 10,
+    seasons: [],
+    heroes: [],
     records,
   }
 }
@@ -46,6 +49,20 @@ describe('StoredData diff', () => {
   it('reports identical documents as unchanged', () => {
     const data = document([record('same', '2026-08-01', 1)])
     expect(diffStoredData(data, structuredClone(data)).hasChanges).toBe(false)
+  })
+
+  it('detects season and hero changes', () => {
+    const before = document([])
+    const after = document([])
+    before.seasons = [{ id: 's1', name: 'S1', startDate: '2026-01-01', endDate: '2026-03-31' }]
+    after.seasons = [{ id: 's1', name: 'S1', startDate: '2026-01-01', endDate: '2026-04-30' }]
+    after.heroes = [{ id: 'h1', name: '后羿' }]
+
+    const diff = diffStoredData(before, after)
+
+    expect(diff.seasons.changed[0].changedFields).toEqual(['endDate'])
+    expect(diff.heroes.added).toEqual([{ id: 'h1', name: '后羿' }])
+    expect(diff.hasChanges).toBe(true)
   })
 })
 
@@ -109,5 +126,25 @@ describe('record merge and conflict resolution', () => {
       ['b', 2],
       ['c', 1],
     ])
+  })
+
+  it('merges and resolves season and hero conflicts independently', () => {
+    const local = document([])
+    local.seasons = [{ id: 's1', name: '本地赛季', startDate: '2026-01-01', endDate: '2026-03-31' }]
+    local.heroes = [{ id: 'h1', name: '本地英雄' }]
+    const remote = document([])
+    remote.seasons = [{ id: 's1', name: '云端赛季', startDate: '2026-01-01', endDate: '2026-03-31' }]
+    remote.heroes = [{ id: 'h1', name: '云端英雄' }]
+
+    const result = mergeStoredData(local, remote)
+    const resolved = resolveDataConflicts(result, {
+      seasons: { s1: 'remote' },
+      heroes: { h1: 'remote' },
+    })
+
+    expect(result.seasonConflicts).toHaveLength(1)
+    expect(result.heroConflicts).toHaveLength(1)
+    expect(resolved.seasons[0].name).toBe('云端赛季')
+    expect(resolved.heroes[0].name).toBe('云端英雄')
   })
 })

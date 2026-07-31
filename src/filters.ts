@@ -1,4 +1,5 @@
-import type { Lane, MatchRecord, MatchResult } from './model'
+import type { Lane, MatchRecord, MatchResult, Season } from './model'
+import { seasonForDate } from './utils/catalog'
 
 export type RecentMatchFilters = {
   startDate: string
@@ -6,6 +7,8 @@ export type RecentMatchFilters = {
   teamSize: number | null
   lane: Lane | null | 'all'
   result: MatchResult | 'all'
+  seasonId: string
+  heroId: string
 }
 
 export const emptyRecentMatchFilters: RecentMatchFilters = {
@@ -14,16 +17,25 @@ export const emptyRecentMatchFilters: RecentMatchFilters = {
   teamSize: null,
   lane: 'all',
   result: 'all',
+  seasonId: 'all',
+  heroId: 'all',
 }
 
-export function filterRecentRecords(records: MatchRecord[], filters: RecentMatchFilters) {
-  return records.filter((record) => (
-    (!filters.startDate || record.date >= filters.startDate)
-    && (!filters.endDate || record.date <= filters.endDate)
-    && (filters.teamSize === null || record.teamSize === filters.teamSize)
-    && (filters.lane === 'all' || record.lane === filters.lane)
-    && (filters.result === 'all' || record.result === filters.result)
-  ))
+export function filterRecentRecords(records: MatchRecord[], filters: RecentMatchFilters, seasons: Season[] = []) {
+  return records.filter((record) => {
+    const season = seasonForDate(seasons, record.date)
+    return (
+      (!filters.startDate || record.date >= filters.startDate)
+      && (!filters.endDate || record.date <= filters.endDate)
+      && (filters.teamSize === null || record.teamSize === filters.teamSize)
+      && (filters.lane === 'all' || record.lane === filters.lane)
+      && (filters.result === 'all' || record.result === filters.result)
+      && (filters.seasonId === 'all'
+        || (filters.seasonId === 'unmatched' ? season === null : season?.id === filters.seasonId))
+      && (filters.heroId === 'all'
+        || (filters.heroId === 'unassigned' ? record.heroId === null : record.heroId === filters.heroId))
+    )
+  })
 }
 
 export function teamSizeTone(size: number) {

@@ -3,9 +3,9 @@ import type { MatchRecord } from '../model'
 import { buildCustomAnalysisRows } from './customAnalysis'
 
 const records: MatchRecord[] = [
-  { id: '1', date: '2026-07-31', order: 1, teamSize: 2, result: 1, lane: 0, points: 10 },
-  { id: '2', date: '2026-08-01', order: 1, teamSize: 2, result: 0, lane: 1, points: -10 },
-  { id: '3', date: '2026-08-03', order: 1, teamSize: 3, result: 1, lane: 1, points: 20 },
+  { id: '1', date: '2026-07-31', order: 1, teamSize: 2, result: 1, lane: 0, points: 10, heroId: null },
+  { id: '2', date: '2026-08-01', order: 1, teamSize: 2, result: 0, lane: 1, points: -10, heroId: null },
+  { id: '3', date: '2026-08-03', order: 1, teamSize: 3, result: 1, lane: 1, points: 20, heroId: null },
 ]
 
 describe('buildCustomAnalysisRows', () => {

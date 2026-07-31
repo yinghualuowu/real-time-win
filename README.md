@@ -23,6 +23,8 @@ npm run dev
    `supabase/migrations/20260730_add_match_points.sql`
    和：
    `supabase/migrations/20260801_add_document_revision.sql`
+   最后执行：
+   `supabase/migrations/20260801_add_seasons_heroes.sql`
 3. 复制 `.env.example` 为 `.env.local`：
 
 ```dotenv
@@ -107,11 +109,19 @@ https://yinghualuowu.github.io/real-time-win/
 积分初始值、胜场积分和负场积分不做静默合并，发生差异时也需要选择使用哪一侧。
 冲突处理提交期间如果云端 revision 再次变化，应用会基于最新云端数据重新提示。
 
+赛季、英雄和对局记录属于同一份 revision 文档。冲突合并时会分别处理赛季、英雄
+和记录；同 ID 内容不一致时需要逐条选择。合并后的赛季区间和英雄引用会再次校验，
+无效数据不会写入本地或云端。
+
 ### revision migration 注意事项
 
 必须先在 Supabase 执行 `20260801_add_document_revision.sql`，再部署使用新版同步逻辑
 的前端。迁移会增加 `match_settings.revision`，并把两参数
 `save_match_document(uuid, jsonb)` 替换为带 `p_expected_revision` 的三参数版本。
+
+赛季/英雄版本还必须继续执行 `20260801_add_seasons_heroes.sql`。该迁移会保留所有
+现有对局，新增赛季和英雄表，并将旧记录的英雄保持为空。赛季不会写入每条记录，
+而是按对局日期自动匹配，因此新增一个日期区间会立即关联该区间内的历史对局。
 
 执行前建议备份数据库。若必须回滚前端，需要同时从上一份 migration 恢复旧的
 `save_match_document` 函数；不要只删除 `revision` 列，否则新旧客户端都会无法保存。
@@ -129,15 +139,42 @@ https://yinghualuowu.github.io/real-time-win/
   Pages 地址，而不是用户 Pages 根地址。
 - 登录后云端无法加载或提示缺少 `revision`：尚未执行
   `20260801_add_document_revision.sql`。
+- 云端提示找不到 `match_seasons`、`match_heroes` 或 `hero_external_id`：尚未执行
+  `20260801_add_seasons_heroes.sql`。
+
+## 赛季与英雄
+
+- 赛季由名称、开始日期和结束日期组成，开始/结束当天都包含在赛季内。
+- 同一个游戏账号的赛季日期不能重叠；前端和数据库都会阻止重叠区间。
+- 对局根据日期自动归属赛季，日期不在任何区间时显示“未匹配赛季”。
+- 每条对局最多关联一个英雄；英雄名称在当前游戏账号内不可重复。
+- 删除已使用的英雄会先确认，并把相关对局的英雄置为“未选择”。
+- 当前赛季摘要显示对局数、胜负、胜率和净积分；英雄面板提供相同维度的简要统计。
+- 自定义分析和逐场积分走势可按赛季筛选；最近对局可组合筛选赛季、英雄、日期、
+  组排、分路和胜负，并支持每页 10/20/50 条。
 
 ## JSON 格式
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "initialScore": 100,
   "winPoints": 10,
   "lossPoints": 10,
+  "seasons": [
+    {
+      "id": "season-id",
+      "name": "S38",
+      "startDate": "2026-07-01",
+      "endDate": "2026-09-30"
+    }
+  ],
+  "heroes": [
+    {
+      "id": "hero-id",
+      "name": "示例英雄"
+    }
+  ],
   "records": [
     {
       "id": "唯一记录ID",
@@ -146,13 +183,16 @@ https://yinghualuowu.github.io/real-time-win/
       "teamSize": 2,
       "result": 1,
       "lane": 0,
-      "points": 10
+      "points": 10,
+      "heroId": "hero-id"
     }
   ]
 }
 ```
 
-`lane`：`0 对抗路、1 打野、2 中路、3 发育路、4 游走`。`points` 是该场实际积分变化。旧 JSON 缺少这些字段时会自动迁移。
+`lane`：`0 对抗路、1 打野、2 中路、3 发育路、4 游走`。`points` 是该场实际
+积分变化，`heroId` 可为 `null`。导入只接受完整的 schema v3 JSON；旧本地缓存会
+自动升级，但旧版 JSON 导出文件不会导入。
 
 ## 验证
 

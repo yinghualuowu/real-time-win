@@ -2,11 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { AuthPanel, useAuth } from './auth'
 import {
-  initialData, laneName, modeName, newId, normalizeData, percent,
+  initialData, laneName, modeName, newId, normalizeData, normalizeImportedData, percent,
 } from './model'
 import type {
   AnalysisDimension, ChartType, GamePlatform, GameProfile, GroupDimension,
-  Lane, MatchRecord, MatchResult, MetricKey, PeriodPreset, StoredData,
+  Hero, Lane, MatchRecord, MatchResult, MetricKey, PeriodPreset, Season, StoredData,
 } from './model'
 import {
   createGameProfile, isRevisionConflictError, loadCloudData, loadGameProfiles,
@@ -20,13 +20,19 @@ import {
 } from './filters'
 import type { RecentMatchFilters } from './filters'
 import {
-  diffStoredData, mergeStoredData, resolveRecordConflicts,
+  diffStoredData, mergeStoredData, resolveDataConflicts,
 } from './sync'
 import type { ConflictChoice, MergeResult } from './sync'
 import { comparePeriods, getPresetRanges } from './utils/analytics'
 import type { DateRange } from './utils/analytics'
 import { buildCustomAnalysisRows } from './utils/customAnalysis'
 import type { AnalysisGranularity } from './utils/customAnalysis'
+import {
+  buildHeroStats, recordsForSeason, seasonForDate, summarizeRecords,
+} from './utils/catalog'
+import { paginate } from './utils/pagination'
+import { SeasonManagerModal } from './components/SeasonManagerModal'
+import { HeroManagerModal } from './components/HeroManagerModal'
 import './App.css'
 
 const metricConfig: Record<MetricKey, { name: string; type: 'bar' | 'line'; color: string; axis: number }> = {
@@ -80,6 +86,7 @@ function App() {
   const [teamSize, setTeamSize] = useState(2)
   const [result, setResult] = useState<MatchResult>(1)
   const [lane, setLane] = useState<Lane>(0)
+  const [heroId, setHeroId] = useState('')
   const [analysisDimension, setAnalysisDimension] = useState<AnalysisDimension>('date')
   const [analysisMetrics, setAnalysisMetrics] = useState<AnalysisMetricKey[]>(['games', 'rate'])
   const [chartType, setChartType] = useState<ChartType>('auto')
@@ -88,6 +95,7 @@ function App() {
   const [analysisGranularity, setAnalysisGranularity] = useState<AnalysisGranularity>('day')
   const [analysisFullscreen, setAnalysisFullscreen] = useState(false)
   const [scoreFullscreen, setScoreFullscreen] = useState(false)
+  const [chartSeasonId, setChartSeasonId] = useState('all')
   const [periodPreset, setPeriodPreset] = useState<PeriodPreset>('week')
   const [compareDimension, setCompareDimension] = useState<GroupDimension>('overall')
   const [compareMetric, setCompareMetric] = useState<MetricKey>('rate')
@@ -97,18 +105,24 @@ function App() {
   const [profiles, setProfiles] = useState<GameProfile[]>([])
   const [activeProfileId, setActiveProfileId] = useState('')
   const [showProfileModal, setShowProfileModal] = useState(false)
+  const [showSeasonManager, setShowSeasonManager] = useState(false)
+  const [showHeroManager, setShowHeroManager] = useState(false)
   const [profileNickname, setProfileNickname] = useState('')
   const [profilePlatform, setProfilePlatform] = useState<GamePlatform>('Q')
   const [attachCurrentData, setAttachCurrentData] = useState(true)
   const [showRestDays, setShowRestDays] = useState(true)
   const [editingRecord, setEditingRecord] = useState<MatchRecord | null>(null)
   const [recentFilters, setRecentFilters] = useState<RecentMatchFilters>(emptyRecentMatchFilters)
+  const [recentPage, setRecentPage] = useState(1)
+  const [recentPageSize, setRecentPageSize] = useState(20)
   const [showAuth, setShowAuth] = useState(false)
   const [loading, setLoading] = useState(false)
   const [offline, setOffline] = useState(false)
   const [cloudRevision, setCloudRevision] = useState(0)
   const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null)
   const [conflictChoices, setConflictChoices] = useState<Record<string, ConflictChoice>>({})
+  const [seasonConflictChoices, setSeasonConflictChoices] = useState<Record<string, ConflictChoice>>({})
+  const [heroConflictChoices, setHeroConflictChoices] = useState<Record<string, ConflictChoice>>({})
   const [conflictSettingsChoice, setConflictSettingsChoice] = useState<ConflictChoice>('local')
   const [message, setMessage] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
@@ -135,6 +149,8 @@ function App() {
   ) => {
     const merge = mergeStoredData(local, remote)
     setConflictChoices({})
+    setSeasonConflictChoices({})
+    setHeroConflictChoices({})
     setConflictSettingsChoice('local')
     setPendingConflict({ kind, local, remote, remoteRevision, merge })
   }
@@ -232,12 +248,58 @@ function App() {
     [data.records],
   )
   const filteredRecentRecords = useMemo(
-    () => filterRecentRecords(sortedRecords, recentFilters),
-    [recentFilters, sortedRecords],
+    () => filterRecentRecords(sortedRecords, recentFilters, data.seasons),
+    [data.seasons, recentFilters, sortedRecords],
   )
   const recentFiltersActive = Object.entries(recentFilters).some(([key, value]) => (
     key === 'teamSize' ? value !== null : value !== '' && value !== 'all'
   ))
+  const recentPagination = useMemo(
+    () => paginate([...filteredRecentRecords].reverse(), recentPage, recentPageSize),
+    [filteredRecentRecords, recentPage, recentPageSize],
+  )
+  const currentSeason = useMemo(
+    () => seasonForDate(data.seasons, new Date().toISOString().slice(0, 10)),
+    [data.seasons],
+  )
+  const currentSeasonStats = useMemo(
+    () => summarizeRecords(currentSeason ? recordsForSeason(sortedRecords, data.seasons, currentSeason.id) : []),
+    [currentSeason, data.seasons, sortedRecords],
+  )
+  const heroStats = useMemo(
+    () => buildHeroStats(sortedRecords, data.heroes),
+    [data.heroes, sortedRecords],
+  )
+
+  useEffect(() => {
+    setRecentPage(1)
+  }, [recentFilters, recentPageSize])
+
+  useEffect(() => {
+    if (recentPage !== recentPagination.page) setRecentPage(recentPagination.page)
+  }, [recentPage, recentPagination.page])
+
+  useEffect(() => {
+    if (chartSeasonId !== 'all' && chartSeasonId !== 'custom' && !data.seasons.some((season) => season.id === chartSeasonId)) {
+      setChartSeasonId('all')
+      setAnalysisStartDate('')
+      setAnalysisEndDate('')
+    }
+  }, [chartSeasonId, data.seasons])
+
+  useEffect(() => {
+    const seasonMissing = !['all', 'unmatched'].includes(recentFilters.seasonId)
+      && !data.seasons.some((season) => season.id === recentFilters.seasonId)
+    const heroMissing = !['all', 'unassigned'].includes(recentFilters.heroId)
+      && !data.heroes.some((hero) => hero.id === recentFilters.heroId)
+    if (seasonMissing || heroMissing) {
+      setRecentFilters({
+        ...recentFilters,
+        seasonId: seasonMissing ? 'all' : recentFilters.seasonId,
+        heroId: heroMissing ? 'all' : recentFilters.heroId,
+      })
+    }
+  }, [data.heroes, data.seasons, recentFilters])
 
   const analytics = useMemo(() => {
     const wins = sortedRecords.filter((record) => record.result === 1).length
@@ -353,20 +415,66 @@ function App() {
     }
   }, [analysisMetrics, analysisRows, chartType])
 
+  const selectedChartSeason = data.seasons.find((season) => season.id === chartSeasonId) ?? null
+  const scoreChart = useMemo(() => {
+    const records = selectedChartSeason
+      ? recordsForSeason(sortedRecords, data.seasons, selectedChartSeason.id)
+      : chartSeasonId === 'custom'
+        ? sortedRecords.filter((record) =>
+            (!analysisStartDate || record.date >= analysisStartDate)
+            && (!analysisEndDate || record.date <= analysisEndDate),
+          )
+        : sortedRecords
+    const rangeStart = selectedChartSeason?.startDate ?? (chartSeasonId === 'custom' ? analysisStartDate : '')
+    const baseline = data.initialScore + (rangeStart
+      ? sortedRecords
+          .filter((record) => record.date < rangeStart)
+          .reduce((total, record) => total + record.points, 0)
+      : 0)
+    const recordedDates = [...new Set(records.map((record) => record.date))].sort()
+    const chartDates = showRestDays && recordedDates.length > 1
+      ? datesBetween(recordedDates[0], recordedDates[recordedDates.length - 1])
+      : recordedDates
+    const points: Array<{ label: string; score: number; detail: string; rest: boolean }> = [
+      { label: selectedChartSeason ? '赛季起点' : '初始', score: baseline, detail: selectedChartSeason ? `${selectedChartSeason.name} 开始前积分` : '初始积分', rest: false },
+    ]
+    let score = baseline
+    chartDates.forEach((chartDate) => {
+      const matches = records.filter((record) => record.date === chartDate)
+      if (!matches.length) {
+        points.push({ label: `${chartDate.slice(5)}·休`, score, detail: `${chartDate} · 休息日`, rest: true })
+      } else {
+        matches.forEach((record) => {
+          score += record.points
+          points.push({
+            label: `${record.date.slice(5)}·${record.order}`,
+            score,
+            detail: `${record.date} 第 ${record.order} 场 · ${modeName(record.teamSize)} · ${laneName(record.lane)} · ${record.result ? '胜利' : '失败'} · ${record.points >= 0 ? '+' : ''}${record.points} 分`,
+            rest: false,
+          })
+        })
+      }
+    })
+    return { records, points, baseline, score }
+  }, [
+    analysisEndDate, analysisStartDate, chartSeasonId, data.initialScore,
+    data.seasons, selectedChartSeason, showRestDays, sortedRecords,
+  ])
+
   const scoreOption = {
     tooltip: {
       trigger: 'axis',
       formatter: (items: Array<{ dataIndex: number; value: number }>) => {
         const item = items[0]
-        return `${analytics.scorePoints[item.dataIndex].detail}<br/><b>${item.value} 分</b>`
+        return `${scoreChart.points[item.dataIndex].detail}<br/><b>${item.value} 分</b>`
       },
     },
     grid: { left: 52, right: 22, top: 30, bottom: 38 },
-    xAxis: { type: 'category', boundaryGap: false, data: analytics.scorePoints.map((item) => item.label) },
+    xAxis: { type: 'category', boundaryGap: false, data: scoreChart.points.map((item) => item.label) },
     yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: '#edf2f7' } } },
     series: [{
       type: 'line', smooth: true,
-      data: analytics.scorePoints.map((item) => ({
+      data: scoreChart.points.map((item) => ({
         value: item.score,
         symbol: item.rest ? 'diamond' : 'circle',
         symbolSize: item.rest ? 12 : 8,
@@ -391,6 +499,18 @@ function App() {
     } else {
       setPreviousRange((range) => ({ ...range, label: '对比期' }))
       setCurrentRange((range) => ({ ...range, label: '当前期' }))
+    }
+  }
+
+  const changeChartSeason = (seasonId: string) => {
+    setChartSeasonId(seasonId)
+    const season = data.seasons.find((item) => item.id === seasonId)
+    if (season) {
+      setAnalysisStartDate(season.startDate)
+      setAnalysisEndDate(season.endDate)
+    } else if (seasonId === 'all') {
+      setAnalysisStartDate('')
+      setAnalysisEndDate('')
     }
   }
 
@@ -462,18 +582,29 @@ function App() {
   const mergeConflictData = () => {
     if (!pendingConflict) return
     const allDecided = pendingConflict.merge.conflicts.every((conflict) => conflictChoices[conflict.id])
+      && pendingConflict.merge.seasonConflicts.every((conflict) => seasonConflictChoices[conflict.id])
+      && pendingConflict.merge.heroConflicts.every((conflict) => heroConflictChoices[conflict.id])
     if (!allDecided) {
       setMessage('请先为每条内容冲突选择要保留的版本')
       return
     }
-    const recordsMerged = resolveRecordConflicts(pendingConflict.merge, conflictChoices)
-    const settings = conflictSettingsChoice === 'local' ? pendingConflict.local : pendingConflict.remote
-    void saveConflictResolution({
-      ...recordsMerged,
-      initialScore: settings.initialScore,
-      winPoints: settings.winPoints,
-      lossPoints: settings.lossPoints,
+    const recordsMerged = resolveDataConflicts(pendingConflict.merge, {
+      records: conflictChoices,
+      seasons: seasonConflictChoices,
+      heroes: heroConflictChoices,
     })
+    const settings = conflictSettingsChoice === 'local' ? pendingConflict.local : pendingConflict.remote
+    try {
+      const resolved = normalizeData({
+        ...recordsMerged,
+        initialScore: settings.initialScore,
+        winPoints: settings.winPoints,
+        lossPoints: settings.lossPoints,
+      })
+      void saveConflictResolution(resolved)
+    } catch (reason) {
+      setMessage(reason instanceof Error ? `合并结果无效：${reason.message}` : '合并结果无效')
+    }
   }
 
   const addRecord = async (event: React.FormEvent) => {
@@ -484,6 +615,7 @@ function App() {
       records: [...data.records, {
         id: newId(), date, order, teamSize, result, lane,
         points: result ? data.winPoints : -data.lossPoints,
+        heroId: heroId || null,
       }],
     })
     if (success) setMessage('已添加一条对局记录')
@@ -538,7 +670,7 @@ function App() {
     const file = event.target.files?.[0]
     if (!file) return
     try {
-      const imported = normalizeData(JSON.parse(await file.text()))
+      const imported = normalizeImportedData(JSON.parse(await file.text()))
       if (!diffStoredData(data, imported).hasChanges) {
         setMessage('导入文件与当前数据一致')
       } else {
@@ -549,6 +681,22 @@ function App() {
     } finally {
       event.target.value = ''
     }
+  }
+
+  const updateSeasons = (seasons: Season[]) => persistData({ ...data, seasons })
+
+  const updateHeroes = (heroes: Hero[]) => persistData({ ...data, heroes })
+
+  const deleteHero = async (removedHeroId: string) => {
+    const success = await persistData({
+      ...data,
+      heroes: data.heroes.filter((hero) => hero.id !== removedHeroId),
+      records: data.records.map((record) =>
+        record.heroId === removedHeroId ? { ...record, heroId: null } : record,
+      ),
+    })
+    if (success && heroId === removedHeroId) setHeroId('')
+    return success
   }
 
   const submitProfile = async (event: React.FormEvent) => {
@@ -655,6 +803,21 @@ function App() {
           <article className="metric-card"><span className="metric-icon orange">✓</span><div><small>胜 / 负</small><strong>{analytics.wins}<i> / {data.records.length - analytics.wins}</i></strong><em>场</em></div></article>
         </section>
 
+        <section className="season-summary-bar">
+          <div className="season-summary-title">
+            <small>当前赛季</small>
+            <strong>{currentSeason?.name ?? '尚未配置当前赛季'}</strong>
+            <span>{currentSeason ? `${currentSeason.startDate} 至 ${currentSeason.endDate}` : '创建包含今天的赛季后，将自动汇总相关对局'}</span>
+          </div>
+          <div className="season-mini-stats">
+            <span><small>对局</small><b>{currentSeasonStats.games}</b></span>
+            <span><small>胜 / 负</small><b>{currentSeasonStats.wins} / {currentSeasonStats.losses}</b></span>
+            <span><small>胜率</small><b>{currentSeasonStats.rate}%</b></span>
+            <span><small>净积分</small><b className={currentSeasonStats.points >= 0 ? 'positive' : 'negative'}>{currentSeasonStats.points >= 0 ? '+' : ''}{currentSeasonStats.points}</b></span>
+          </div>
+          <button className="button secondary" onClick={() => setShowSeasonManager(true)}>管理赛季</button>
+        </section>
+
         <section className="chart-stack">
           <article ref={analysisPanel} className="panel chart-panel wide analysis-panel">
             <div className="panel-heading chart-heading">
@@ -678,10 +841,11 @@ function App() {
               </div>
             </div>
             <div className="analysis-range-controls">
-              <label><span>开始日期</span><input type="date" value={analysisStartDate} max={analysisEndDate || undefined} onChange={(event) => setAnalysisStartDate(event.target.value)} /></label>
-              <label><span>结束日期</span><input type="date" value={analysisEndDate} min={analysisStartDate || undefined} onChange={(event) => setAnalysisEndDate(event.target.value)} /></label>
+              <label><span>赛季</span><select value={chartSeasonId} onChange={(event) => changeChartSeason(event.target.value)}><option value="all">全部赛季</option>{chartSeasonId === 'custom' && <option value="custom">自定义范围</option>}{data.seasons.map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}</select></label>
+              <label><span>开始日期</span><input type="date" value={analysisStartDate} max={analysisEndDate || undefined} onChange={(event) => { setAnalysisStartDate(event.target.value); setChartSeasonId('custom') }} /></label>
+              <label><span>结束日期</span><input type="date" value={analysisEndDate} min={analysisStartDate || undefined} onChange={(event) => { setAnalysisEndDate(event.target.value); setChartSeasonId('custom') }} /></label>
               {analysisDimension === 'date' && <label><span>日期划分</span><select value={analysisGranularity} onChange={(event) => setAnalysisGranularity(event.target.value as AnalysisGranularity)}><option value="day">按日</option><option value="week">按周</option><option value="month">按月</option></select></label>}
-              <button type="button" disabled={!analysisStartDate && !analysisEndDate} onClick={() => { setAnalysisStartDate(''); setAnalysisEndDate('') }}>清除范围</button>
+              <button type="button" disabled={!analysisStartDate && !analysisEndDate} onClick={() => { setAnalysisStartDate(''); setAnalysisEndDate(''); setChartSeasonId('all') }}>清除范围</button>
             </div>
             <div className="metric-picker">
               {(Object.keys(analysisMetricConfig) as AnalysisMetricKey[])
@@ -700,8 +864,8 @@ function App() {
             {analysisRows.length && analysisMetrics.length ? <ReactECharts option={analysisOption} notMerge style={{ height: analysisFullscreen ? 'calc(100vh - 205px)' : 330 }} /> : <div className="empty">当前日期范围暂无数据</div>}
           </article>
           <article ref={scorePanel} className="panel chart-panel score-panel">
-            <div className="panel-heading"><div><h2>逐场积分走势</h2><p>橙色菱形表示休息日，积分保持不变</p></div><div className="score-chart-actions"><label><input type="checkbox" checked={showRestDays} onChange={(event) => setShowRestDays(event.target.checked)} /> 显示休息日</label><span className={analytics.score >= data.initialScore ? 'trend up' : 'trend down'}>{analytics.score - data.initialScore >= 0 ? '+' : ''}{analytics.score - data.initialScore}</span><button type="button" className="fullscreen-button" onClick={() => void toggleChartFullscreen(scorePanel.current)}>{scoreFullscreen ? '退出全屏' : '全屏显示'}</button></div></div>
-            {sortedRecords.length ? <ReactECharts option={scoreOption} notMerge style={{ height: scoreFullscreen ? 'calc(100vh - 105px)' : 330 }} /> : <div className="empty">暂无数据</div>}
+            <div className="panel-heading"><div><h2>逐场积分走势</h2><p>橙色菱形表示休息日，积分保持不变</p></div><div className="score-chart-actions"><select value={chartSeasonId} onChange={(event) => changeChartSeason(event.target.value)}><option value="all">全部赛季</option>{chartSeasonId === 'custom' && <option value="custom">自定义范围</option>}{data.seasons.map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}</select><label><input type="checkbox" checked={showRestDays} onChange={(event) => setShowRestDays(event.target.checked)} /> 显示休息日</label><span className={scoreChart.score >= scoreChart.baseline ? 'trend up' : 'trend down'}>{scoreChart.score - scoreChart.baseline >= 0 ? '+' : ''}{scoreChart.score - scoreChart.baseline}</span><button type="button" className="fullscreen-button" onClick={() => void toggleChartFullscreen(scorePanel.current)}>{scoreFullscreen ? '退出全屏' : '全屏显示'}</button></div></div>
+            {scoreChart.records.length ? <ReactECharts option={scoreOption} notMerge style={{ height: scoreFullscreen ? 'calc(100vh - 105px)' : 330 }} /> : <div className="empty">当前赛季暂无数据</div>}
           </article>
         </section>
 
@@ -742,6 +906,8 @@ function App() {
               <label className="field"><span>对局日期</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
               <label className="field"><span>组排人数</span><select value={teamSize} onChange={(event) => setTeamSize(Number(event.target.value))}>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{modeName(size)}</option>)}</select></label>
               <label className="field"><span>分路</span><select value={lane} onChange={(event) => setLane(Number(event.target.value) as Lane)}>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{laneName(value as Lane)}</option>)}</select></label>
+              <label className="field"><span>英雄</span><div className="field-with-action"><select value={heroId} onChange={(event) => setHeroId(event.target.value)}><option value="">未选择</option>{data.heroes.map((hero) => <option key={hero.id} value={hero.id}>{hero.name}</option>)}</select><button type="button" onClick={() => setShowHeroManager(true)}>管理</button></div></label>
+              <div className="field"><span>所属赛季</span><div className="readonly-field">{seasonForDate(data.seasons, date)?.name ?? '未匹配赛季'}<button type="button" onClick={() => setShowSeasonManager(true)}>管理赛季</button></div></div>
               <div className="field"><span>对局结果</span><div className="result-switch"><button type="button" className={result === 1 ? 'active win' : ''} onClick={() => setResult(1)}>胜利</button><button type="button" className={result === 0 ? 'active loss' : ''} onClick={() => setResult(0)}>失败</button></div></div>
               <button className="button primary submit" disabled={offline || Boolean(session && !activeProfileId)} type="submit">＋ 添加记录</button>
             </form>
@@ -754,6 +920,14 @@ function App() {
           </article>
         </section>
 
+        <section className="panel hero-panel">
+          <div className="panel-heading"><div><h2>英雄表现</h2><p>按英雄汇总对局、胜率和净积分</p></div><button className="button secondary" onClick={() => setShowHeroManager(true)}>管理英雄</button></div>
+          <div className="hero-stats-grid">
+            {heroStats.map((item) => <article key={item.hero.id}><strong>{item.hero.name}</strong><span>{item.games} 场 · {item.wins} 胜 {item.losses} 负</span><div><b>{item.rate}%</b><em className={item.points >= 0 ? 'positive' : 'negative'}>{item.points >= 0 ? '+' : ''}{item.points} 分</em></div></article>)}
+            {!heroStats.length && <div className="empty compact">添加英雄并在对局中关联后，这里会显示英雄数据。</div>}
+          </div>
+        </section>
+
         <section className="panel records-panel">
           <div className="panel-heading"><div><h2>最近对局</h2><p>{recentFiltersActive ? `筛选出 ${filteredRecentRecords.length} / ${data.records.length} 条记录` : `共 ${data.records.length} 条记录`}</p></div></div>
           <div className="record-filters">
@@ -762,12 +936,15 @@ function App() {
             <label><span>组排</span><select className={recentFilters.teamSize === null ? '' : teamSizeTone(recentFilters.teamSize)} value={recentFilters.teamSize ?? 'all'} onChange={(event) => setRecentFilters({ ...recentFilters, teamSize: event.target.value === 'all' ? null : Number(event.target.value) })}><option value="all">全部组排</option>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{modeName(size)}</option>)}</select></label>
             <label><span>分路</span><select className={recentFilters.lane === 'all' ? '' : laneTone(recentFilters.lane)} value={recentFilters.lane === 'all' ? 'all' : recentFilters.lane === null ? 'unknown' : recentFilters.lane} onChange={(event) => setRecentFilters({ ...recentFilters, lane: event.target.value === 'all' ? 'all' : event.target.value === 'unknown' ? null : Number(event.target.value) as Lane })}><option value="all">全部分路</option><option value="unknown">未设置</option>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{laneName(value as Lane)}</option>)}</select></label>
             <label><span>结果</span><select value={recentFilters.result} onChange={(event) => setRecentFilters({ ...recentFilters, result: event.target.value === 'all' ? 'all' : Number(event.target.value) as MatchResult })}><option value="all">全部结果</option><option value="1">胜利</option><option value="0">失败</option></select></label>
+            <label><span>赛季</span><select value={recentFilters.seasonId} onChange={(event) => setRecentFilters({ ...recentFilters, seasonId: event.target.value })}><option value="all">全部赛季</option><option value="unmatched">未匹配赛季</option>{data.seasons.map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}</select></label>
+            <label><span>英雄</span><select value={recentFilters.heroId} onChange={(event) => setRecentFilters({ ...recentFilters, heroId: event.target.value })}><option value="all">全部英雄</option><option value="unassigned">未选择英雄</option>{data.heroes.map((hero) => <option key={hero.id} value={hero.id}>{hero.name}</option>)}</select></label>
             <button type="button" disabled={!recentFiltersActive} onClick={() => setRecentFilters(emptyRecentMatchFilters)}>重置筛选</button>
           </div>
-          <div className="table-wrap"><table><thead><tr><th>日期 / 场次</th><th>组排</th><th>分路</th><th>结果</th><th>积分</th><th /></tr></thead><tbody>
-            {[...filteredRecentRecords].reverse().map((record) => <tr key={record.id}><td>{record.date} · {record.order}</td><td><span className={`mode-tag ${teamSizeTone(record.teamSize)}`}>{modeName(record.teamSize)}</span></td><td><span className={`lane-tag ${laneTone(record.lane)}`}>{laneName(record.lane)}</span></td><td><span className={`result-tag ${record.result ? 'win' : 'loss'}`}>{record.result ? '胜利' : '失败'}</span></td><td className={record.points >= 0 ? 'positive' : 'negative'}>{record.points >= 0 ? '+' : ''}{record.points}</td><td><div className="row-actions"><button className="edit" onClick={() => setEditingRecord({ ...record })}>编辑</button><button className="delete" onClick={() => void deleteRecord(record.id)}>×</button></div></td></tr>)}
-            {!filteredRecentRecords.length && <tr><td colSpan={6} className="empty-cell">{data.records.length ? '没有符合筛选条件的对局' : '暂无对局记录'}</td></tr>}
+          <div className="table-wrap"><table><thead><tr><th>日期 / 场次</th><th>赛季</th><th>英雄</th><th>组排</th><th>分路</th><th>结果</th><th>积分</th><th /></tr></thead><tbody>
+            {recentPagination.items.map((record) => <tr key={record.id}><td>{record.date} · {record.order}</td><td><span className="season-tag">{seasonForDate(data.seasons, record.date)?.name ?? '未匹配'}</span></td><td><span className="hero-tag">{data.heroes.find((hero) => hero.id === record.heroId)?.name ?? '未选择'}</span></td><td><span className={`mode-tag ${teamSizeTone(record.teamSize)}`}>{modeName(record.teamSize)}</span></td><td><span className={`lane-tag ${laneTone(record.lane)}`}>{laneName(record.lane)}</span></td><td><span className={`result-tag ${record.result ? 'win' : 'loss'}`}>{record.result ? '胜利' : '失败'}</span></td><td className={record.points >= 0 ? 'positive' : 'negative'}>{record.points >= 0 ? '+' : ''}{record.points}</td><td><div className="row-actions"><button className="edit" onClick={() => setEditingRecord({ ...record })}>编辑</button><button className="delete" onClick={() => void deleteRecord(record.id)}>×</button></div></td></tr>)}
+            {!recentPagination.items.length && <tr><td colSpan={8} className="empty-cell">{data.records.length ? '没有符合筛选条件的对局' : '暂无对局记录'}</td></tr>}
           </tbody></table></div>
+          <div className="pagination-bar"><span>共 {filteredRecentRecords.length} 条</span><label>每页 <select value={recentPageSize} onChange={(event) => setRecentPageSize(Number(event.target.value))}>{[10, 20, 50].map((size) => <option key={size} value={size}>{size}</option>)}</select></label><button disabled={recentPagination.page <= 1} onClick={() => setRecentPage((page) => page - 1)}>上一页</button><b>{recentPagination.page} / {recentPagination.pageCount}</b><button disabled={recentPagination.page >= recentPagination.pageCount} onClick={() => setRecentPage((page) => page + 1)}>下一页</button></div>
         </section>
       </main>
       <footer>{session ? `已登录 · ${activeProfile ? `${activeProfile.platform}区 ${activeProfile.nickname}` : '请选择游戏账号'}` : '本地模式 · 登录后可同步到云端'}</footer>
@@ -779,7 +956,7 @@ function App() {
             <p>{conflictLabels.local}有 {pendingConflict.local.records.length} 条，{conflictLabels.remote}有 {pendingConflict.remote.records.length} 条。请选择处理方式，确认前不会写入数据。</p>
             <div className="conflict-summary">
               <span><b>{pendingConflict.merge.data.records.length}</b> 条合并后记录</span>
-              <span><b>{pendingConflict.merge.conflicts.length}</b> 条内容冲突</span>
+              <span><b>{pendingConflict.merge.conflicts.length + pendingConflict.merge.seasonConflicts.length + pendingConflict.merge.heroConflicts.length}</b> 条内容冲突</span>
             </div>
             {diffStoredData(pendingConflict.local, pendingConflict.remote).changedSettings.length > 0 && (
               <fieldset className="settings-conflict">
@@ -787,6 +964,30 @@ function App() {
                 <label><input type="radio" name="settings-source" checked={conflictSettingsChoice === 'local'} onChange={() => setConflictSettingsChoice('local')} /> {conflictLabels.local}（初始 {pendingConflict.local.initialScore}，胜 +{pendingConflict.local.winPoints}，负 -{pendingConflict.local.lossPoints}）</label>
                 <label><input type="radio" name="settings-source" checked={conflictSettingsChoice === 'remote'} onChange={() => setConflictSettingsChoice('remote')} /> {conflictLabels.remote}（初始 {pendingConflict.remote.initialScore}，胜 +{pendingConflict.remote.winPoints}，负 -{pendingConflict.remote.lossPoints}）</label>
               </fieldset>
+            )}
+            {pendingConflict.merge.seasonConflicts.length > 0 && (
+              <div className="record-conflicts">
+                <h3>逐条选择赛季版本</h3>
+                {pendingConflict.merge.seasonConflicts.map((conflict) => (
+                  <fieldset key={conflict.id}>
+                    <legend>{conflict.differingFields.join('、')} 不同</legend>
+                    <label className={seasonConflictChoices[conflict.id] === 'local' ? 'selected' : ''}><input type="radio" name={`season-${conflict.id}`} checked={seasonConflictChoices[conflict.id] === 'local'} onChange={() => setSeasonConflictChoices({ ...seasonConflictChoices, [conflict.id]: 'local' })} /><span><b>{conflictLabels.local}</b>{conflict.local.name} · {conflict.local.startDate} 至 {conflict.local.endDate}</span></label>
+                    <label className={seasonConflictChoices[conflict.id] === 'remote' ? 'selected' : ''}><input type="radio" name={`season-${conflict.id}`} checked={seasonConflictChoices[conflict.id] === 'remote'} onChange={() => setSeasonConflictChoices({ ...seasonConflictChoices, [conflict.id]: 'remote' })} /><span><b>{conflictLabels.remote}</b>{conflict.remote.name} · {conflict.remote.startDate} 至 {conflict.remote.endDate}</span></label>
+                  </fieldset>
+                ))}
+              </div>
+            )}
+            {pendingConflict.merge.heroConflicts.length > 0 && (
+              <div className="record-conflicts">
+                <h3>逐条选择英雄版本</h3>
+                {pendingConflict.merge.heroConflicts.map((conflict) => (
+                  <fieldset key={conflict.id}>
+                    <legend>{conflict.differingFields.join('、')} 不同</legend>
+                    <label className={heroConflictChoices[conflict.id] === 'local' ? 'selected' : ''}><input type="radio" name={`hero-${conflict.id}`} checked={heroConflictChoices[conflict.id] === 'local'} onChange={() => setHeroConflictChoices({ ...heroConflictChoices, [conflict.id]: 'local' })} /><span><b>{conflictLabels.local}</b>{conflict.local.name}</span></label>
+                    <label className={heroConflictChoices[conflict.id] === 'remote' ? 'selected' : ''}><input type="radio" name={`hero-${conflict.id}`} checked={heroConflictChoices[conflict.id] === 'remote'} onChange={() => setHeroConflictChoices({ ...heroConflictChoices, [conflict.id]: 'remote' })} /><span><b>{conflictLabels.remote}</b>{conflict.remote.name}</span></label>
+                  </fieldset>
+                ))}
+              </div>
             )}
             {pendingConflict.merge.conflicts.length > 0 && (
               <div className="record-conflicts">
@@ -803,7 +1004,7 @@ function App() {
             <div className="conflict-actions">
               <button className="button danger" disabled={loading} onClick={() => void saveConflictResolution(pendingConflict.local)}>{conflictLabels.overwrite}</button>
               <button className="button secondary" disabled={loading} onClick={discardConflictLocal}>{conflictLabels.discard}</button>
-              <button className="button primary" disabled={loading || pendingConflict.merge.conflicts.some((conflict) => !conflictChoices[conflict.id])} onClick={mergeConflictData}>合并并保存</button>
+              <button className="button primary" disabled={loading || pendingConflict.merge.conflicts.some((conflict) => !conflictChoices[conflict.id]) || pendingConflict.merge.seasonConflicts.some((conflict) => !seasonConflictChoices[conflict.id]) || pendingConflict.merge.heroConflicts.some((conflict) => !heroConflictChoices[conflict.id])} onClick={mergeConflictData}>合并并保存</button>
             </div>
           </section>
         </div>
@@ -818,6 +1019,8 @@ function App() {
               <label className="field"><span>场次</span><input type="number" min="1" value={editingRecord.order} onChange={(event) => setEditingRecord({ ...editingRecord, order: Number(event.target.value) })} required /></label>
               <label className="field"><span>组排</span><select value={editingRecord.teamSize} onChange={(event) => setEditingRecord({ ...editingRecord, teamSize: Number(event.target.value) })}>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{modeName(size)}</option>)}</select></label>
               <label className="field"><span>分路</span><select value={editingRecord.lane ?? 'unknown'} onChange={(event) => setEditingRecord({ ...editingRecord, lane: event.target.value === 'unknown' ? null : Number(event.target.value) as Lane })}><option value="unknown">未设置</option>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{laneName(value as Lane)}</option>)}</select></label>
+              <label className="field"><span>英雄</span><select value={editingRecord.heroId ?? ''} onChange={(event) => setEditingRecord({ ...editingRecord, heroId: event.target.value || null })}><option value="">未选择</option>{data.heroes.map((hero) => <option key={hero.id} value={hero.id}>{hero.name}</option>)}</select></label>
+              <div className="field"><span>所属赛季</span><div className="readonly-field">{seasonForDate(data.seasons, editingRecord.date)?.name ?? '未匹配赛季'}</div></div>
               <div className="field"><span>结果</span><div className="result-switch"><button type="button" className={editingRecord.result === 1 ? 'active win' : ''} onClick={() => setEditingRecord({ ...editingRecord, result: 1, points: data.winPoints })}>胜利</button><button type="button" className={editingRecord.result === 0 ? 'active loss' : ''} onClick={() => setEditingRecord({ ...editingRecord, result: 0, points: -data.lossPoints })}>失败</button></div></div>
               <label className="field"><span>积分变化</span><input type="number" value={editingRecord.points} onChange={(event) => setEditingRecord({ ...editingRecord, points: Number(event.target.value) })} required /></label>
             </div>
@@ -826,6 +1029,8 @@ function App() {
           </form>
         </div>
       )}
+      {showSeasonManager && <SeasonManagerModal seasons={data.seasons} records={data.records} disabled={offline || loading} onChange={updateSeasons} onClose={() => setShowSeasonManager(false)} />}
+      {showHeroManager && <HeroManagerModal heroes={data.heroes} records={data.records} disabled={offline || loading} onChange={updateHeroes} onDelete={deleteHero} onClose={() => setShowHeroManager(false)} />}
       {showProfileModal && session && (
         <div className="auth-backdrop">
           <form className="auth-card profile-form" onSubmit={submitProfile}>

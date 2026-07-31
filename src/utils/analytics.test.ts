@@ -60,9 +60,12 @@ describe('legacy JSON migration', () => {
         { id: 'b', date: '2026-07-28', teamSize: 1, result: 0 },
       ],
     })
-    expect(data.schemaVersion).toBe(2)
+    expect(data.schemaVersion).toBe(3)
+    expect(data.seasons).toEqual([])
+    expect(data.heroes).toEqual([])
     expect(data.records.map((item) => item.order)).toEqual([1, 2])
     expect(data.records.every((item) => item.lane === null)).toBe(true)
+    expect(data.records.every((item) => item.heroId === null)).toBe(true)
     expect(data.records.map((item) => item.points)).toEqual([10, -10])
   })
 
