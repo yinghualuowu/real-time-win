@@ -117,6 +117,7 @@ function App() {
   const [recentPageSize, setRecentPageSize] = useState(20)
   const [showAuth, setShowAuth] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [recordSubmitting, setRecordSubmitting] = useState(false)
   const [offline, setOffline] = useState(false)
   const [cloudRevision, setCloudRevision] = useState(0)
   const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null)
@@ -609,16 +610,22 @@ function App() {
 
   const addRecord = async (event: React.FormEvent) => {
     event.preventDefault()
-    const order = Math.max(0, ...data.records.filter((record) => record.date === date).map((record) => record.order)) + 1
-    const success = await persistData({
-      ...data,
-      records: [...data.records, {
-        id: newId(), date, order, teamSize, result, lane,
-        points: result ? data.winPoints : -data.lossPoints,
-        heroId: heroId || null,
-      }],
-    })
-    if (success) setMessage('已添加一条对局记录')
+    if (recordSubmitting) return
+    setRecordSubmitting(true)
+    try {
+      const order = Math.max(0, ...data.records.filter((record) => record.date === date).map((record) => record.order)) + 1
+      const success = await persistData({
+        ...data,
+        records: [...data.records, {
+          id: newId(), date, order, teamSize, result, lane,
+          points: result ? data.winPoints : -data.lossPoints,
+          heroId: heroId || null,
+        }],
+      })
+      if (success) setMessage('已添加一条对局记录')
+    } finally {
+      setRecordSubmitting(false)
+    }
   }
 
   const deleteRecord = async (id: string) => {
@@ -909,7 +916,7 @@ function App() {
               <label className="field"><span>英雄</span><div className="field-with-action"><select value={heroId} onChange={(event) => setHeroId(event.target.value)}><option value="">未选择</option>{data.heroes.map((hero) => <option key={hero.id} value={hero.id}>{hero.name}</option>)}</select><button type="button" onClick={() => setShowHeroManager(true)}>管理</button></div></label>
               <div className="field"><span>所属赛季</span><div className="readonly-field">{seasonForDate(data.seasons, date)?.name ?? '未匹配赛季'}<button type="button" onClick={() => setShowSeasonManager(true)}>管理赛季</button></div></div>
               <div className="field"><span>对局结果</span><div className="result-switch"><button type="button" className={result === 1 ? 'active win' : ''} onClick={() => setResult(1)}>胜利</button><button type="button" className={result === 0 ? 'active loss' : ''} onClick={() => setResult(0)}>失败</button></div></div>
-              <button className="button primary submit" disabled={offline || Boolean(session && !activeProfileId)} type="submit">＋ 添加记录</button>
+              <button className="button primary submit" disabled={recordSubmitting || offline || Boolean(session && !activeProfileId)} type="submit">{recordSubmitting ? '保存中…' : '＋ 添加记录'}</button>
             </form>
           </article>
           <article className="panel mode-panel">

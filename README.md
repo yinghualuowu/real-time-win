@@ -123,6 +123,11 @@ https://yinghualuowu.github.io/real-time-win/
 现有对局，新增赛季和英雄表，并将旧记录的英雄保持为空。赛季不会写入每条记录，
 而是按对局日期自动匹配，因此新增一个日期区间会立即关联该区间内的历史对局。
 
+完成上述迁移后，继续执行 `20260820_optimize_save_match_document.sql`。该迁移将
+`save_match_document` 的赛季、英雄和对局逐行写入改为集合写入，并把 revision
+检查改为原子条件更新，以降低 PostgreSQL 的执行时间和 CPU 开销。迁移仍然保持
+“整份文档覆盖”语义，函数参数和返回值不变，因此不需要同步修改前端。
+
 执行前建议备份数据库。若必须回滚前端，需要同时从上一份 migration 恢复旧的
 `save_match_document` 函数；不要只删除 `revision` 列，否则新旧客户端都会无法保存。
 
