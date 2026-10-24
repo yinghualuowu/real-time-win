@@ -55,7 +55,7 @@ main { width: min(1240px, calc(100% - 48px)); margin: 0 auto; padding: 46px 0 64
 .season-mini-stats b { color: #4d4668; font-size: 13px; }
 
 .content-grid { display: grid; grid-template-columns: 1.65fr 1fr; gap: 18px; margin-bottom: 18px; }
-.content-grid.lower { grid-template-columns: 1fr 1.45fr; }
+.content-grid.lower { grid-template-columns: 1fr; }
 .chart-stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; margin-bottom: 18px; }
 .panel { background: #fff; border: 1px solid #e7ecf3; border-radius: 14px; box-shadow: 0 8px 24px #2236570a; }
 .panel-heading { padding: 21px 23px 10px; display: flex; align-items: center; justify-content: space-between; }
@@ -107,9 +107,15 @@ main { width: min(1240px, calc(100% - 48px)); margin: 0 auto; padding: 46px 0 64
 .result-switch button.active.win { color: #2cae70; }
 .result-switch button.active.loss { color: #df6e5a; }
 .quick-record { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid #e2e8f2; border-radius: 11px; background: #f8faff; }
-.quick-record-heading { margin-bottom: 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.quick-record-heading strong { color: #46546b; font-size: 12px; }
-.quick-record-heading span { color: #939eb0; font-size: 9px; }
+.quick-record-heading { margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.quick-record-title { display: flex; flex-direction: column; gap: 3px; }
+.quick-record-title strong { color: #46546b; font-size: 12px; }
+.quick-record-title span { color: #939eb0; font-size: 9px; }
+.quick-lane-picker { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.quick-lane-picker > span { margin-right: 2px; color: #7f8ba0; font-size: 9px; font-weight: 600; }
+.quick-lane-picker button { border: 1px solid #dbe2ed; border-radius: 7px; padding: 5px 8px; color: #748096; background: #fff; cursor: pointer; font-size: 9px; }
+.quick-lane-picker button:hover { border-color: #aab9df; background: #f4f7ff; }
+.quick-lane-picker button.active { color: #fff; border-color: #607fda; background: #607fda; box-shadow: 0 3px 8px #527cf52e; }
 .quick-record-table { overflow-x: auto; }
 .quick-record-header, .quick-record-row { min-width: 500px; display: grid; grid-template-columns: minmax(110px, 1.4fr) repeat(5, minmax(58px, 1fr)); gap: 6px; align-items: center; }
 .quick-record-header { margin-bottom: 5px; }
@@ -303,7 +309,8 @@ footer { padding: 22px; border-top: 1px solid #e7ecf3; color: #a4adbc; text-alig
   .score-rule { width: 100%; box-sizing: border-box; flex-wrap: wrap; }
   .metric-grid { grid-template-columns: 1fr; }
   .add-panel form { grid-template-columns: 1fr; }
-  .quick-record-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .quick-record-heading { align-items: flex-start; flex-direction: column; gap: 8px; }
+  .quick-lane-picker { justify-content: flex-start; }
   .record-filters { grid-template-columns: 1fr 1fr; }
   .record-filters button { grid-column: 1 / -1; }
   .season-mini-stats { grid-template-columns: 1fr 1fr; }

@@ -927,7 +927,20 @@ function App() {
               <label className="field"><span>对局日期</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
               <div className="field"><span>对局结果</span><div className="result-switch"><button type="button" className={result === 1 ? 'active win' : ''} onClick={() => setResult(1)}>胜利</button><button type="button" className={result === 0 ? 'active loss' : ''} onClick={() => setResult(0)}>失败</button></div></div>
               <div className="quick-record">
-                <div className="quick-record-heading"><strong>英雄快捷记录</strong><span>英雄按使用频率排序；数字为历史场次，点击即保存</span></div>
+                <div className="quick-record-heading">
+                  <div className="quick-record-title"><strong>英雄快捷记录</strong><span>英雄按使用频率排序；数字为历史场次，点击即保存</span></div>
+                  <div className="quick-lane-picker">
+                    <span>快捷分路</span>
+                    {[0, 1, 2, 3, 4].map((value) => (
+                      <button
+                        type="button"
+                        className={lane === value ? 'active' : ''}
+                        key={value}
+                        onClick={() => setLane(value as Lane)}
+                      >{laneName(value as Lane)}</button>
+                    ))}
+                  </div>
+                </div>
                 {heroFrequencyRows.length ? (
                   <div className="quick-record-table">
                     <div className="quick-record-header"><span>英雄</span>{[1, 2, 3, 4, 5].map((size) => <span key={size}>{modeName(size)}</span>)}</div>
