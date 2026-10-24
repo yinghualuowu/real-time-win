@@ -106,6 +106,26 @@ main { width: min(1240px, calc(100% - 48px)); margin: 0 auto; padding: 46px 0 64
 .result-switch button.active { background: #fff; box-shadow: 0 2px 7px #253a5b1a; }
 .result-switch button.active.win { color: #2cae70; }
 .result-switch button.active.loss { color: #df6e5a; }
+.quick-record { grid-column: 1 / -1; min-width: 0; padding: 12px; border: 1px solid #e2e8f2; border-radius: 11px; background: #f8faff; }
+.quick-record-heading { margin-bottom: 10px; display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.quick-record-heading strong { color: #46546b; font-size: 12px; }
+.quick-record-heading span { color: #939eb0; font-size: 9px; }
+.quick-record-table { overflow-x: auto; }
+.quick-record-header, .quick-record-row { min-width: 500px; display: grid; grid-template-columns: minmax(110px, 1.4fr) repeat(5, minmax(58px, 1fr)); gap: 6px; align-items: center; }
+.quick-record-header { margin-bottom: 5px; }
+.quick-record-header span { color: #8c98aa; text-align: center; font-size: 9px; font-weight: 600; }
+.quick-record-header span:first-child { padding-left: 8px; text-align: left; }
+.quick-record-row + .quick-record-row { margin-top: 5px; }
+.quick-record-row > span { min-width: 0; padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; }
+.quick-record-row > span strong { overflow: hidden; color: #445168; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.quick-record-row > span small { color: #9aa5b6; font-size: 8px; }
+.quick-record-row button { min-height: 34px; border: 1px solid #d9e2f1; border-radius: 8px; color: #536fbd; background: #fff; cursor: pointer; font-size: 12px; font-weight: 700; transition: border-color .15s, background .15s, transform .15s; }
+.quick-record-row button:hover { transform: translateY(-1px); border-color: #8fa8eb; background: #f0f4ff; }
+.quick-record-row button:disabled { cursor: not-allowed; opacity: .5; transform: none; }
+.quick-record-row button small { margin-left: 2px; color: #9aa5b6; font-size: 8px; font-weight: 500; }
+.quick-record-empty { padding: 18px; color: #9aa5b6; text-align: center; font-size: 11px; }
+.form-section-label { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; color: #8b97aa; font-size: 10px; font-weight: 600; }
+.form-section-label::after { height: 1px; flex: 1; background: #e8ecf3; content: ''; }
 .submit { grid-column: 1 / -1; margin-top: 3px; }
 .button:disabled { cursor: not-allowed; opacity: .55; transform: none; }
 
@@ -283,6 +303,7 @@ footer { padding: 22px; border-top: 1px solid #e7ecf3; color: #a4adbc; text-alig
   .score-rule { width: 100%; box-sizing: border-box; flex-wrap: wrap; }
   .metric-grid { grid-template-columns: 1fr; }
   .add-panel form { grid-template-columns: 1fr; }
+  .quick-record-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
   .record-filters { grid-template-columns: 1fr 1fr; }
   .record-filters button { grid-column: 1 / -1; }
   .season-mini-stats { grid-template-columns: 1fr 1fr; }

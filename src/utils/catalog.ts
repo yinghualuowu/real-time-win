@@ -36,3 +36,22 @@ export function buildHeroStats(records: MatchRecord[], heroes: Hero[]) {
     ...summarizeRecords(records.filter((record) => record.heroId === hero.id)),
   })).sort((left, right) => right.games - left.games || left.hero.name.localeCompare(right.hero.name, 'zh-CN'))
 }
+
+export type HeroFrequencyRow = {
+  hero: Hero
+  games: number
+  teamCounts: number[]
+}
+
+export function buildHeroFrequencyRows(records: MatchRecord[], heroes: Hero[]): HeroFrequencyRow[] {
+  return heroes.map((hero) => {
+    const heroRecords = records.filter((record) => record.heroId === hero.id)
+    return {
+      hero,
+      games: heroRecords.length,
+      teamCounts: [1, 2, 3, 4, 5].map(
+        (teamSize) => heroRecords.filter((record) => record.teamSize === teamSize).length,
+      ),
+    }
+  }).sort((left, right) => right.games - left.games || left.hero.name.localeCompare(right.hero.name, 'zh-CN'))
+}

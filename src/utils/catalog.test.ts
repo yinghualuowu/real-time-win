@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { Hero, MatchRecord, Season } from '../model'
-import { buildHeroStats, recordsForSeason, seasonForDate, summarizeRecords } from './catalog'
+import {
+  buildHeroFrequencyRows, buildHeroStats, recordsForSeason, seasonForDate, summarizeRecords,
+} from './catalog'
 
 const seasons: Season[] = [
   { id: 's1', name: 'S1', startDate: '2026-01-01', endDate: '2026-03-31' },
@@ -26,6 +28,13 @@ describe('hero summaries', () => {
     expect(buildHeroStats(records, heroes)).toMatchObject([
       { hero: { id: 'h1' }, games: 2, wins: 1 },
       { hero: { id: 'h2' }, games: 0, wins: 0 },
+    ])
+  })
+
+  it('sorts quick-record heroes by frequency and counts each team size', () => {
+    expect(buildHeroFrequencyRows(records, heroes)).toEqual([
+      { hero: heroes[0], games: 2, teamCounts: [0, 2, 0, 0, 0] },
+      { hero: heroes[1], games: 0, teamCounts: [0, 0, 0, 0, 0] },
     ])
   })
 })

@@ -28,7 +28,7 @@ import type { DateRange } from './utils/analytics'
 import { buildCustomAnalysisRows } from './utils/customAnalysis'
 import type { AnalysisGranularity } from './utils/customAnalysis'
 import {
-  buildHeroStats, recordsForSeason, seasonForDate, summarizeRecords,
+  buildHeroFrequencyRows, buildHeroStats, recordsForSeason, seasonForDate, summarizeRecords,
 } from './utils/catalog'
 import { paginate } from './utils/pagination'
 import { SeasonManagerModal } from './components/SeasonManagerModal'
@@ -269,6 +269,10 @@ function App() {
   )
   const heroStats = useMemo(
     () => buildHeroStats(sortedRecords, data.heroes),
+    [data.heroes, sortedRecords],
+  )
+  const heroFrequencyRows = useMemo(
+    () => buildHeroFrequencyRows(sortedRecords, data.heroes),
     [data.heroes, sortedRecords],
   )
 
@@ -608,8 +612,7 @@ function App() {
     }
   }
 
-  const addRecord = async (event: React.FormEvent) => {
-    event.preventDefault()
+  const saveNewRecord = async (selectedTeamSize: number, selectedHeroId: string) => {
     if (recordSubmitting) return
     setRecordSubmitting(true)
     try {
@@ -617,15 +620,26 @@ function App() {
       const success = await persistData({
         ...data,
         records: [...data.records, {
-          id: newId(), date, order, teamSize, result, lane,
+          id: newId(), date, order, teamSize: selectedTeamSize, result, lane,
           points: result ? data.winPoints : -data.lossPoints,
-          heroId: heroId || null,
+          heroId: selectedHeroId || null,
         }],
       })
       if (success) setMessage('已添加一条对局记录')
     } finally {
       setRecordSubmitting(false)
     }
+  }
+
+  const addRecord = async (event: React.FormEvent) => {
+    event.preventDefault()
+    await saveNewRecord(teamSize, heroId)
+  }
+
+  const quickAddRecord = async (selectedTeamSize: number, selectedHeroId: string) => {
+    setTeamSize(selectedTeamSize)
+    setHeroId(selectedHeroId)
+    await saveNewRecord(selectedTeamSize, selectedHeroId)
   }
 
   const deleteRecord = async (id: string) => {
@@ -908,14 +922,37 @@ function App() {
 
         <section className="content-grid lower">
           <article className="panel add-panel">
-            <div className="panel-heading"><div><h2>记录一场对局</h2><p>{session ? `保存到 ${activeProfile?.nickname ?? '当前游戏账号'}` : '保存在当前浏览器'}</p></div></div>
+            <div className="panel-heading"><div><h2>记录一场对局</h2><p>{session ? `保存到 ${activeProfile?.nickname ?? '当前游戏账号'}` : '保存在当前浏览器'} · 可用常用组合快速记录</p></div></div>
             <form onSubmit={addRecord}>
               <label className="field"><span>对局日期</span><input type="date" value={date} onChange={(event) => setDate(event.target.value)} required /></label>
+              <div className="field"><span>对局结果</span><div className="result-switch"><button type="button" className={result === 1 ? 'active win' : ''} onClick={() => setResult(1)}>胜利</button><button type="button" className={result === 0 ? 'active loss' : ''} onClick={() => setResult(0)}>失败</button></div></div>
+              <div className="quick-record">
+                <div className="quick-record-heading"><strong>英雄快捷记录</strong><span>英雄按使用频率排序；数字为历史场次，点击即保存</span></div>
+                {heroFrequencyRows.length ? (
+                  <div className="quick-record-table">
+                    <div className="quick-record-header"><span>英雄</span>{[1, 2, 3, 4, 5].map((size) => <span key={size}>{modeName(size)}</span>)}</div>
+                    {heroFrequencyRows.map((row) => (
+                      <div className="quick-record-row" key={row.hero.id}>
+                        <span title={`${row.hero.name}共 ${row.games} 场`}><strong>{row.hero.name}</strong><small>{row.games} 场</small></span>
+                        {row.teamCounts.map((count, index) => (
+                          <button
+                            type="button"
+                            key={index + 1}
+                            disabled={recordSubmitting || offline || Boolean(session && !activeProfileId)}
+                            title={`添加：${row.hero.name} · ${modeName(index + 1)} · ${result ? '胜利' : '失败'}（分路沿用当前选择）`}
+                            onClick={() => void quickAddRecord(index + 1, row.hero.id)}
+                          >{count}<small>场</small></button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                ) : <div className="quick-record-empty">添加英雄后即可使用快捷记录</div>}
+              </div>
+              <div className="form-section-label">详细记录</div>
               <label className="field"><span>组排人数</span><select value={teamSize} onChange={(event) => setTeamSize(Number(event.target.value))}>{[1, 2, 3, 4, 5].map((size) => <option key={size} value={size}>{modeName(size)}</option>)}</select></label>
               <label className="field"><span>分路</span><select value={lane} onChange={(event) => setLane(Number(event.target.value) as Lane)}>{[0, 1, 2, 3, 4].map((value) => <option key={value} value={value}>{laneName(value as Lane)}</option>)}</select></label>
               <label className="field"><span>英雄</span><div className="field-with-action"><select value={heroId} onChange={(event) => setHeroId(event.target.value)}><option value="">未选择</option>{data.heroes.map((hero) => <option key={hero.id} value={hero.id}>{hero.name}</option>)}</select><button type="button" onClick={() => setShowHeroManager(true)}>管理</button></div></label>
               <div className="field"><span>所属赛季</span><div className="readonly-field">{seasonForDate(data.seasons, date)?.name ?? '未匹配赛季'}<button type="button" onClick={() => setShowSeasonManager(true)}>管理赛季</button></div></div>
-              <div className="field"><span>对局结果</span><div className="result-switch"><button type="button" className={result === 1 ? 'active win' : ''} onClick={() => setResult(1)}>胜利</button><button type="button" className={result === 0 ? 'active loss' : ''} onClick={() => setResult(0)}>失败</button></div></div>
               <button className="button primary submit" disabled={recordSubmitting || offline || Boolean(session && !activeProfileId)} type="submit">{recordSubmitting ? '保存中…' : '＋ 添加记录'}</button>
             </form>
           </article>
